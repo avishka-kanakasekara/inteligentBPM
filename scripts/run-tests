@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+VENV_DIR="${ROOT_DIR}/.venv"
+
+if [[ ! -d "${VENV_DIR}" ]]; then
+  echo "Virtualenv missing. Run scripts/setup-backend first." >&2
+  exit 1
+fi
+
+# shellcheck disable=SC1091
+source "${VENV_DIR}/bin/activate"
+
+echo "==> contracts tests"
+cd "${ROOT_DIR}/packages/contracts"
+pytest
+
+echo "==> api tests"
+cd "${ROOT_DIR}/services/api"
+pytest
+
+echo "==> workflow worker tests"
+cd "${ROOT_DIR}/services/workflow_worker"
+pytest
+
+echo "==> frontend_types tests"
+cd "${ROOT_DIR}/packages/frontend_types"
+if command -v pnpm >/dev/null 2>&1 && [[ -f pnpm-lock.yaml ]]; then
+  pnpm test
+else
+  npm test
+fi
+
+echo "==> web tests"
+cd "${ROOT_DIR}/apps/web"
+if command -v pnpm >/dev/null 2>&1 && [[ -f pnpm-lock.yaml ]]; then
+  pnpm test
+else
+  npm test
+fi
+
+echo "==> foundation docker absence test"
+cd "${ROOT_DIR}"
+pytest tests/test_no_docker_files.py
+
+echo "==> All tests passed"

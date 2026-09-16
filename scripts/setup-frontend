@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+echo "==> Installing frontend_types"
+cd "${ROOT_DIR}/packages/frontend_types"
+if command -v pnpm >/dev/null 2>&1; then
+  pnpm install
+else
+  npm install
+fi
+
+echo "==> Installing web app"
+cd "${ROOT_DIR}/apps/web"
+if command -v pnpm >/dev/null 2>&1; then
+  pnpm install
+else
+  npm install
+fi
+
+echo "==> Frontend setup complete (no Docker required)"

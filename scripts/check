@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+VENV_DIR="${ROOT_DIR}/.venv"
+
+if [[ ! -d "${VENV_DIR}" ]]; then
+  echo "Virtualenv missing. Run scripts/setup-backend first." >&2
+  exit 1
+fi
+
+# shellcheck disable=SC1091
+source "${VENV_DIR}/bin/activate"
+
+echo "==> ruff (contracts)"
+cd "${ROOT_DIR}/packages/contracts"
+ruff check .
+
+echo "==> ruff (api)"
+cd "${ROOT_DIR}/services/api"
+ruff check .
+
+echo "==> ruff (worker)"
+cd "${ROOT_DIR}/services/workflow_worker"
+ruff check .
+
+echo "==> mypy (contracts)"
+cd "${ROOT_DIR}/packages/contracts"
+mypy src/bpm_contracts
+
+echo "==> mypy (api)"
+cd "${ROOT_DIR}/services/api"
+mypy app
+
+echo "==> mypy (worker)"
+cd "${ROOT_DIR}/services/workflow_worker"
+mypy workflow_worker
+
+echo "==> frontend typecheck"
+cd "${ROOT_DIR}/apps/web"
+npm run typecheck
+
+echo "==> frontend build"
+npm run build
+
+echo "==> checks passed (native toolchain only)"

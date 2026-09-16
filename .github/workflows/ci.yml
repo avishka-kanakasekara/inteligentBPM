@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Python packages (venv, no Docker)
+        run: |
+          python -m venv .venv
+          source .venv/bin/activate
+          python -m pip install --upgrade pip
+          pip install -e "./packages/contracts[dev]"
+          pip install -e "./services/api[dev]"
+          pip install -e "./services/workflow_worker[dev]"
+      - name: Lint and typecheck
+        run: |
+          source .venv/bin/activate
+          ruff check packages/contracts services/api services/workflow_worker
+          mypy packages/contracts/src/bpm_contracts
+          mypy --explicit-package-bases services/api/app
+          mypy services/workflow_worker/workflow_worker
+      - name: Test
+        run: |
+          source .venv/bin/activate
+          pytest packages/contracts services/api services/workflow_worker tests
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: |
+            apps/web/package-lock.json
+            packages/frontend_types/package-lock.json
+      - name: Install frontend packages
+        run: |
+          npm install --prefix packages/frontend_types
+          npm install --prefix apps/web
+      - name: Typecheck, test, and build
+        run: |
+          npm test --prefix packages/frontend_types
+          npm test --prefix apps/web
+          npm run typecheck --prefix apps/web
+          npm run build --prefix apps/web
+
+  no-docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Assert no Docker artifacts are required
+        run: |
+          python -m pip install pytest
+          pytest tests/test_no_docker_files.py

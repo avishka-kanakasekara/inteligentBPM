@@ -1,0 +1,48 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "bpm-workflow-worker"
+version = "0.1.0"
+description = "Native workflow worker (Temporal Cloud or mock mode)"
+requires-python = ">=3.12"
+dependencies = [
+  "bpm-contracts",
+  "pydantic>=2.7,<3",
+  "pydantic-settings>=2.4.0",
+  "structlog>=24.4.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.2",
+  "ruff>=0.6",
+  "mypy>=1.11",
+]
+temporal = [
+  "temporalio>=1.7.0",
+  "bpm-api",
+]
+
+[project.scripts]
+bpm-workflow-worker = "workflow_worker.main:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["workflow_worker"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["workflow_worker"]

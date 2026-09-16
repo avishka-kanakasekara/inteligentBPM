@@ -1,0 +1,44 @@
+# Python
+.venv/
+**/__pycache__/
+**/*.py[cod]
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+
+# Node
+node_modules/
+apps/web/dist/
+packages/frontend_types/dist/
+npm-debug.log*
+pnpm-debug.log*
+
+# Env / secrets
+.env
+.env.local
+apps/web/.env
+apps/web/.env.local
+*.pem
+credentials.json
+service-account*.json
+secrets/
+**/secrets/
+*moj-transcription-project*.json
+
+# IDE / OS
+.DS_Store
+.idea/
+.vscode/
+
+# Coverage / tooling
+coverage/
+htmlcov/
+.coverage
+playwright-report/
+test-results/
+
+# Do not add Docker ignore patterns as an invitation to use Docker —
+# this project intentionally has no Dockerfiles or compose files.

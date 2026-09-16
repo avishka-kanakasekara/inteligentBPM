@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+VENV_DIR="${ROOT_DIR}/.venv"
+
+if [[ -z "${DATABASE_URL:-}" && -z "${SUPABASE_DB_URL:-}" ]]; then
+  echo "Set DATABASE_URL (or SUPABASE_DB_URL) to your hosted Supabase development database." >&2
+  echo "Do not use local database containers." >&2
+  exit 1
+fi
+
+if [[ ! -d "${VENV_DIR}" ]]; then
+  echo "Virtualenv missing. Run scripts/setup-backend first." >&2
+  exit 1
+fi
+
+# shellcheck disable=SC1091
+source "${VENV_DIR}/bin/activate"
+python -m pip install -q "psycopg[binary]>=3.2"
+
+cd "${ROOT_DIR}"
+pytest supabase/tests/test_rls_security.py -v
