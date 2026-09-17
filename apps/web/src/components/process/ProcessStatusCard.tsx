@@ -9,6 +9,7 @@ import {
   ProcessStatusBadge,
   RiskBadge,
 } from "./StatusBadges";
+import { Agent4ExecutionHub } from "../execution/Agent4ExecutionHub";
 
 type ActionKey = "allocate" | "risk" | "approval" | "execute";
 
@@ -213,6 +214,7 @@ export function ProcessStatusCard({ process }: { process: ProcessSummary }) {
     execution: false,
   });
   const [showDetails, setShowDetails] = useState(true);
+  const [openExecutionHub, setOpenExecutionHub] = useState(false);
 
   const wantAllocation = Boolean(process.has_allocation || localPresence.allocation);
   const wantRisk = Boolean(process.has_risk || localPresence.risk);
@@ -280,6 +282,9 @@ export function ProcessStatusCard({ process }: { process: ProcessSummary }) {
       setNotice(success);
       setShowDetails(true);
       void queryClient.invalidateQueries({ queryKey: ["processes"] });
+      void queryClient.invalidateQueries({ queryKey: ["active-runs"] });
+      void queryClient.invalidateQueries({ queryKey: ["history"] });
+      void queryClient.invalidateQueries({ queryKey: ["audit-events"] });
     } catch (err: unknown) {
       const message =
         err instanceof ApiError
@@ -602,6 +607,27 @@ export function ProcessStatusCard({ process }: { process: ProcessSummary }) {
 
         <button
           type="button"
+          onClick={() => setOpenExecutionHub(true)}
+          style={{
+            background: "linear-gradient(135deg, var(--color-primary, #2f5bda), var(--color-primary-hover, #2449b8))",
+            color: "#ffffff",
+            border: "none",
+            borderRadius: "6px",
+            padding: "0.42rem 0.85rem",
+            fontSize: "0.82rem",
+            fontWeight: 700,
+            cursor: "pointer",
+            boxShadow: "0 2px 6px rgba(47, 91, 218, 0.25)",
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "0.35rem",
+          }}
+        >
+          ⚡ Agent 4 Execution Hub
+        </button>
+
+        <button
+          type="button"
           disabled={disabled}
           onClick={() =>
             void runAction(
@@ -617,9 +643,17 @@ export function ProcessStatusCard({ process }: { process: ProcessSummary }) {
           }
           style={ghostBtn}
         >
-          {busy === "execute" ? "Executing…" : "Run Agent 4 (Execute Plan)"}
+          {busy === "execute" ? "Executing…" : "Quick Auto-Run"}
         </button>
       </div>
+
+      {openExecutionHub && (
+        <Agent4ExecutionHub
+          process={process}
+          onClose={() => setOpenExecutionHub(false)}
+          onRefreshParent={() => void refreshDetails()}
+        />
+      )}
     </article>
   );
 }

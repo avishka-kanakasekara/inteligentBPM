@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from uuid import UUID, uuid4
-import pytest
+
 from fastapi.testclient import TestClient
 
 from app.domain.enums import OrgRole

@@ -1,5 +1,6 @@
 import type {
   ApprovalSummary,
+  AuditEvent,
   Budget,
   CostCenter,
   Department,
@@ -12,6 +13,7 @@ import type {
   Organization,
   OrganizationProfile,
   Policy,
+  ProcessRun,
   ProcessSummary,
   Supplier,
   SupplierContact,
@@ -101,6 +103,88 @@ const PROCESSES: ProcessSummary[] = [
   },
 ];
 
+const PROCESS_RUNS: ProcessRun[] = [
+  {
+    id: "55555555-5555-5555-5555-555555555501",
+    organization_id: ORG_ID,
+    process_id: "33333333-3333-3333-3333-333333333302",
+    process_version_id: null,
+    status: "executing",
+    initiated_by_user_id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+    correlation_id: "corr-run-office",
+    created_at: new Date(Date.now() - 1000 * 60 * 18).toISOString(),
+    updated_at: new Date().toISOString(),
+    dry_run: false,
+    current_step_index: 2,
+    pause_reason: null,
+  },
+  {
+    id: "55555555-5555-5555-5555-555555555502",
+    organization_id: ORG_ID,
+    process_id: "33333333-3333-3333-3333-333333333303",
+    process_version_id: null,
+    status: "blocked",
+    initiated_by_user_id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+    correlation_id: "corr-run-software",
+    created_at: new Date(Date.now() - 1000 * 60 * 60).toISOString(),
+    updated_at: new Date().toISOString(),
+    dry_run: false,
+    current_step_index: 0,
+    pause_reason: "Missing renewal quote attachment",
+  },
+];
+
+const AUDIT_EVENTS: AuditEvent[] = [
+  {
+    id: "66666666-6666-6666-6666-666666666601",
+    organization_id: ORG_ID,
+    actor_user_id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+    action: "approval.decided",
+    resource_type: "approval",
+    resource_id: "44444444-4444-4444-4444-444444444401",
+    correlation_id: "corr-approval-1",
+    payload: { result: "success", decision: "approved", process_name: "Laptop procurement" },
+    created_at: new Date(Date.now() - 1000 * 60 * 12).toISOString(),
+    result: "success",
+  },
+  {
+    id: "66666666-6666-6666-6666-666666666602",
+    organization_id: ORG_ID,
+    actor_user_id: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+    action: "document.created",
+    resource_type: "document",
+    resource_id: "77777777-7777-7777-7777-777777777701",
+    correlation_id: "corr-doc-1",
+    payload: { result: "success", title: "Uploaded RFQ notes" },
+    created_at: new Date(Date.now() - 1000 * 60 * 45).toISOString(),
+    result: "success",
+  },
+  {
+    id: "66666666-6666-6666-6666-666666666603",
+    organization_id: ORG_ID,
+    actor_user_id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+    action: "process_run.created",
+    resource_type: "process_run",
+    resource_id: "55555555-5555-5555-5555-555555555501",
+    correlation_id: "corr-run-office",
+    payload: { result: "success", process_name: "Office renovation" },
+    created_at: new Date(Date.now() - 1000 * 60 * 18).toISOString(),
+    result: "success",
+  },
+  {
+    id: "66666666-6666-6666-6666-666666666604",
+    organization_id: ORG_ID,
+    actor_user_id: null,
+    action: "workflow.audit_checkpoint",
+    resource_type: "workflow",
+    resource_id: "55555555-5555-5555-5555-555555555502",
+    correlation_id: "corr-run-software",
+    payload: { result: "blocked", reason: "policy hold" },
+    created_at: new Date(Date.now() - 1000 * 60 * 8).toISOString(),
+    result: "blocked",
+  },
+];
+
 const APPROVALS: ApprovalSummary[] = [
   {
     id: "44444444-4444-4444-4444-444444444401",
@@ -142,9 +226,11 @@ const APPROVALS: ApprovalSummary[] = [
     ],
     blocking_explanation: null,
     approval_history: [
-      { at: new Date().toISOString(), action: "package_created", actor: "system", note: "Bound to plan+risk hashes" },
+      { at: new Date(Date.now() - 1000 * 60 * 75).toISOString(), action: "package_created", actor: "system", note: "Bound to plan+risk hashes" },
     ],
     override_required: false,
+    created_at: new Date(Date.now() - 1000 * 60 * 75).toISOString(), // ~1 hour 15m ago
+    updated_at: new Date(Date.now() - 1000 * 60 * 30).toISOString(),
   },
   {
     id: "44444444-4444-4444-4444-444444444402",
@@ -176,9 +262,72 @@ const APPROVALS: ApprovalSummary[] = [
     blocking_explanation:
       "Blocked actions cannot proceed without an audited override workflow. Gemini cannot approve this action.",
     approval_history: [
-      { at: new Date().toISOString(), action: "blocked", actor: "agent_3", note: "Awaiting override" },
+      { at: new Date(Date.now() - 1000 * 60 * 60 * 5).toISOString(), action: "blocked", actor: "agent_3", note: "Awaiting override" },
     ],
     override_required: true,
+    created_at: new Date(Date.now() - 1000 * 60 * 60 * 5).toISOString(), // 5 hours ago
+    updated_at: new Date(Date.now() - 1000 * 60 * 60 * 4).toISOString(),
+  },
+  {
+    id: "44444444-4444-4444-4444-444444444403",
+    process_id: "33333333-3333-3333-3333-333333333303",
+    process_name: "Cloud infrastructure capacity upgrade",
+    status: "approved",
+    risk_level: "low",
+    risk_decision: "CLEAR",
+    required_roles: ["devops_lead"],
+    snapshot_hash: "snap-infra",
+    plan_snapshot_hash: "plan-hash-3",
+    risk_snapshot_hash: "risk-hash-3",
+    policy_evidence: ["INFRA-002 §1 capacity scaling within monthly budget"],
+    source_refs: [{ type: "policy", id: "p2", label: "Infrastructure Scaling Policy" }],
+    decision_note: "Approved per Q3 budget allocation",
+    risk_summary: "Deterministic decision: CLEAR — standard capacity scaling within budget limits.",
+    risk_items: [],
+    blocking_explanation: null,
+    approval_history: [
+      { at: new Date(Date.now() - 1000 * 60 * 60 * 26).toISOString(), action: "package_created", actor: "system", note: "Auto-analyzed" },
+      { at: new Date(Date.now() - 1000 * 60 * 60 * 25).toISOString(), action: "approved", actor: "alex.owner@example.com", note: "Approved" },
+    ],
+    override_required: false,
+    created_at: new Date(Date.now() - 1000 * 60 * 60 * 26).toISOString(), // Yesterday (~26 hours ago)
+    updated_at: new Date(Date.now() - 1000 * 60 * 60 * 25).toISOString(),
+  },
+  {
+    id: "44444444-4444-4444-4444-444444444404",
+    process_id: "33333333-3333-3333-3333-333333333304",
+    process_name: "Off-cycle bonus payroll run",
+    status: "rejected",
+    risk_level: "high",
+    risk_decision: "APPROVAL_REQUIRED",
+    required_roles: ["finance_director"],
+    snapshot_hash: "snap-payroll",
+    plan_snapshot_hash: "plan-hash-4",
+    risk_snapshot_hash: "risk-hash-4",
+    policy_evidence: ["HR-004 §2 off-cycle compensation policy"],
+    source_refs: [{ type: "policy", id: "p3", label: "Compensation & Payroll Policy" }],
+    decision_note: "Rejected — missing written executive sign-off sheet.",
+    risk_summary: "Deterministic decision: APPROVAL_REQUIRED — off-cycle payroll exceeds threshold without pre-cleared sign-off.",
+    risk_items: [
+      {
+        id: "risk_payroll_signoff",
+        category: "financial",
+        severity: "high",
+        description: "Off-cycle compensation exceeds standard threshold without pre-cleared sign-off.",
+        blocking: false,
+        required_remediation: "Attach signed executive compensation committee approval.",
+        required_approver: "finance_director",
+        policy_code: "HR-004",
+      },
+    ],
+    blocking_explanation: null,
+    approval_history: [
+      { at: new Date(Date.now() - 1000 * 60 * 60 * 72).toISOString(), action: "package_created", actor: "system" },
+      { at: new Date(Date.now() - 1000 * 60 * 60 * 70).toISOString(), action: "rejected", actor: "alex.owner@example.com", note: "Missing executive sheet" },
+    ],
+    override_required: false,
+    created_at: new Date(Date.now() - 1000 * 60 * 60 * 72).toISOString(), // 3 days ago
+    updated_at: new Date(Date.now() - 1000 * 60 * 60 * 70).toISOString(),
   },
 ];
 
@@ -1046,6 +1195,29 @@ export const mockApi = {
     if (path.endsWith("/approvals") && method === "POST") {
       return { id: "appr-1", status: "pending" } as T;
     }
+    if (path.endsWith("/complete") && method === "POST") {
+      const id = path.split("/")[2];
+      const found = PROCESSES.find((p) => p.id === id);
+      if (!found) {
+        throw new ApiError("Process not found", { code: "NOT_FOUND", status: 404 });
+      }
+      if (["completed", "cancelled"].includes(found.status)) {
+        throw new ApiError(`Process is already ${found.status}`, {
+          code: "PROCESS_ALREADY_TERMINAL",
+          status: 400,
+        });
+      }
+      found.status = "completed";
+      found.execution_status = "completed";
+      found.human_decision = found.human_decision || "Marked complete";
+      found.updated_at = new Date().toISOString();
+      const run = PROCESS_RUNS.find((r) => r.process_id === id);
+      if (run && !["completed", "cancelled", "failed"].includes(run.status)) {
+        run.status = "completed";
+        run.updated_at = new Date().toISOString();
+      }
+      return { ...found } as T;
+    }
     if (path === "/approvals/summaries") return APPROVALS as T;
     if (path === "/notifications") return NOTIFICATIONS as T;
 
@@ -1079,6 +1251,33 @@ export const mockApi = {
         cancel_at_period_end: true,
       };
       return snap as T;
+    }
+
+    if (path.startsWith("/audit-events") && method === "GET") {
+      const url = new URL(path, "http://mock.local");
+      const action = url.searchParams.get("action")?.toLowerCase() ?? "";
+      const limit = Number(url.searchParams.get("limit") ?? "50");
+      const offset = Number(url.searchParams.get("offset") ?? "0");
+      let items = [...AUDIT_EVENTS].sort(
+        (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+      );
+      if (action) items = items.filter((e) => e.action.toLowerCase().includes(action));
+      const total = items.length;
+      return {
+        items: items.slice(offset, offset + limit),
+        meta: { total, limit, offset },
+      } as T;
+    }
+
+    if (path.startsWith("/process-runs") && method === "GET" && !path.includes("/events")) {
+      const url = new URL(path, "http://mock.local");
+      const limit = Number(url.searchParams.get("limit") ?? "50");
+      const offset = Number(url.searchParams.get("offset") ?? "0");
+      const items = [...PROCESS_RUNS];
+      return {
+        items: items.slice(offset, offset + limit),
+        meta: { total: items.length, limit, offset },
+      } as T;
     }
 
     throw new ApiError(`Mock route not found: ${path}`, { code: "NOT_FOUND", status: 404 });

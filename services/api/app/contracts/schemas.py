@@ -571,6 +571,7 @@ class ApprovalSummaryResponse(APIModel):
     risk_summary: str | None = None
     risk_items: list[RiskItem] | None = None
     blocking_explanation: str | None = None
+    created_at: datetime | None = None
     updated_at: datetime
 
 
@@ -780,6 +781,11 @@ class ExecutionInvokeRequest(APIModel):
     organization_id: UUID | None = None
 
 
+class ExecutionControlRequest(APIModel):
+    reason: str | None = None
+    run_id: UUID | None = None
+
+
 class ExecutionStateResponse(APIModel):
     process_id: UUID
     process_run_id: UUID
@@ -795,6 +801,34 @@ class ExecutionStateResponse(APIModel):
     stop_conditions: list[str] = Field(default_factory=list)
     available_tools: list[str] = Field(default_factory=list)
     email_outbox: list[dict[str, Any]] = Field(default_factory=list)
+    generated_documents: list[dict[str, Any]] = Field(default_factory=list)
+    calendar_events: list[dict[str, Any]] = Field(default_factory=list)
+    tasks: list[dict[str, Any]] = Field(default_factory=list)
+    notifications: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ExecutionReportResponse(APIModel):
+    process_id: UUID
+    process_name: str
+    process_run_id: UUID
+    status: str
+    dry_run: bool = False
+    plan_goal: str = ""
+    steps_total: int = 0
+    steps_completed: int = 0
+    tools_invoked_total: int = 0
+    tools_successful: int = 0
+    tools_failed: int = 0
+    plan_snapshot_hash: str | None = None
+    risk_snapshot_hash: str | None = None
+    approval_id: str | None = None
+    generated_documents_count: int = 0
+    emails_count: int = 0
+    calendar_events_count: int = 0
+    tasks_count: int = 0
+    notifications_count: int = 0
+    invocations: list[dict[str, Any]] = Field(default_factory=list)
+    generated_at: str
 
 
 class ToolDefinitionResponse(APIModel):

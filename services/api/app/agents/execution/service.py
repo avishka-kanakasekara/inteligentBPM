@@ -375,6 +375,141 @@ class ExecutionService:
         )
         return self.get_execution(process_id, run_id=run.id)
 
+    def pause_execution(
+        self,
+        process_id: UUID,
+        *,
+        user_id: UUID,
+        correlation_id: str | None,
+        run_id: UUID | None = None,
+        reason: str = "Paused by operator",
+    ) -> dict[str, Any]:
+        run = self._resolve_run(process_id, run_id)
+        if run.status not in {
+            ProcessRunStatus.EXECUTING,
+            ProcessRunStatus.DRAFT,
+            ProcessRunStatus.APPROVED,
+        }:
+            raise ConflictError(
+                f"Process run cannot be paused from status {run.status.value}",
+                code="RUN_NOT_PAUSABLE",
+            )
+        run.status = ProcessRunStatus.PAUSED
+        run.pause_reason = reason
+        run.updated_at = utcnow()
+        from app.database.persist_helpers import persist_if_postgres
+
+        persist_if_postgres(self.store, "process_runs", run.id)
+        self.audit.record(
+            organization_id=self.organization_id,
+            actor_user_id=user_id,
+            action="execution.paused",
+            resource_type="process_run",
+            resource_id=run.id,
+            correlation_id=correlation_id,
+            payload={"reason": reason},
+        )
+        return self.get_execution(process_id, run_id=run.id)
+
+    def cancel_execution(
+        self,
+        process_id: UUID,
+        *,
+        user_id: UUID,
+        correlation_id: str | None,
+        run_id: UUID | None = None,
+        reason: str = "Cancelled by operator",
+    ) -> dict[str, Any]:
+        run = self._resolve_run(process_id, run_id)
+        if run.status in {ProcessRunStatus.COMPLETED, ProcessRunStatus.CANCELLED}:
+            raise ConflictError("Process run is already terminal", code="RUN_ALREADY_TERMINAL")
+        run.status = ProcessRunStatus.CANCELLED
+        run.pause_reason = reason
+        run.updated_at = utcnow()
+        from app.database.persist_helpers import persist_if_postgres
+
+        persist_if_postgres(self.store, "process_runs", run.id)
+        self.audit.record(
+            organization_id=self.organization_id,
+            actor_user_id=user_id,
+            action="execution.cancelled",
+            resource_type="process_run",
+            resource_id=run.id,
+            correlation_id=correlation_id,
+            payload={"reason": reason},
+        )
+        return self.get_execution(process_id, run_id=run.id)
+
+    def reset_execution(
+        self,
+        process_id: UUID,
+        *,
+        user_id: UUID,
+        correlation_id: str | None,
+        run_id: UUID | None = None,
+    ) -> dict[str, Any]:
+        run = self._resolve_run(process_id, run_id)
+        run.status = ProcessRunStatus.DRAFT
+        run.current_step_index = 0
+        run.pause_reason = None
+        run.updated_at = utcnow()
+        from app.database.persist_helpers import persist_if_postgres
+
+        persist_if_postgres(self.store, "process_runs", run.id)
+        self.audit.record(
+            organization_id=self.organization_id,
+            actor_user_id=user_id,
+            action="execution.reset",
+            resource_type="process_run",
+            resource_id=run.id,
+            correlation_id=correlation_id,
+        )
+        return self.get_execution(process_id, run_id=run.id)
+
+    def get_execution_summary_report(
+        self, process_id: UUID, *, run_id: UUID | None = None
+    ) -> dict[str, Any]:
+        state = self.get_execution(process_id, run_id=run_id)
+        proc = self.processes.get(process_id)
+        run = self._resolve_run(process_id, run_id)
+        version = self.processes.get_version(process_id, run.process_version_id)
+        plan = version.plan_snapshot or {}
+        invocations = state.get("tool_invocations") or []
+        successful_tools = [
+            i for i in invocations if i.get("status") in {"executed", "replayed"}
+        ]
+        failed_tools = [
+            i for i in invocations if i.get("status") in {"failed", "denied"}
+        ]
+
+        return {
+            "process_id": process_id,
+            "process_name": proc.name,
+            "process_run_id": run.id,
+            "status": run.status.value,
+            "dry_run": bool(getattr(run, "dry_run", False)),
+            "plan_goal": plan.get("goal", ""),
+            "steps_total": len(plan.get("steps", [])),
+            "steps_completed": int(getattr(run, "current_step_index", 0) or 0),
+            "tools_invoked_total": len(invocations),
+            "tools_successful": len(successful_tools),
+            "tools_failed": len(failed_tools),
+            "plan_snapshot_hash": getattr(run, "plan_snapshot_hash", None),
+            "risk_snapshot_hash": getattr(run, "risk_snapshot_hash", None),
+            "approval_id": (
+                str(getattr(run, "approval_id", None))
+                if getattr(run, "approval_id", None)
+                else None
+            ),
+            "generated_documents_count": len(state.get("generated_documents", [])),
+            "emails_count": len(state.get("email_outbox", [])),
+            "calendar_events_count": len(state.get("calendar_events", [])),
+            "tasks_count": len(state.get("tasks", [])),
+            "notifications_count": len(state.get("notifications", [])),
+            "invocations": invocations,
+            "generated_at": utcnow().isoformat(),
+        }
+
     def invoke_tool(
         self,
         process_id: UUID,

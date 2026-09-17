@@ -807,3 +807,63 @@ def test_supplier_request_quote_accepts_composed_fields(
     data = rfq.json()["result"]["data"]
     assert data["product_sku"] == "LAPTOP-14"
 
+
+def test_execution_pause_resume_cancel_reset_flow(
+    org_a: UUID, user_a_id: UUID, auth_headers_a: dict[str, str], client: TestClient
+) -> None:
+    process_id, _, approval_id = _seed_ready_process(org_a, user_id=user_a_id)
+    start = client.post(
+        f"/v1/processes/{process_id}/execute",
+        headers=auth_headers_a,
+        json={"approval_id": str(approval_id)},
+    )
+    assert start.status_code == 200
+    assert start.json()["status"] == "executing"
+
+    # Pause execution
+    paused = client.post(
+        f"/v1/processes/{process_id}/execution/pause",
+        headers=auth_headers_a,
+        json={"reason": "Operator requested pause"},
+    )
+    assert paused.status_code == 200
+    assert paused.json()["status"] == "paused"
+    assert paused.json()["pause_reason"] == "Operator requested pause"
+
+    # Resume execution
+    resumed = client.post(
+        f"/v1/processes/{process_id}/execution/resume",
+        headers=auth_headers_a,
+    )
+    assert resumed.status_code == 200
+    assert resumed.json()["status"] == "executing"
+
+    # Cancel execution
+    cancelled = client.post(
+        f"/v1/processes/{process_id}/execution/cancel",
+        headers=auth_headers_a,
+        json={"reason": "Operator aborted"},
+    )
+    assert cancelled.status_code == 200
+    assert cancelled.json()["status"] == "cancelled"
+
+    # Reset execution
+    reset = client.post(
+        f"/v1/processes/{process_id}/execution/reset",
+        headers=auth_headers_a,
+    )
+    assert reset.status_code == 200
+    assert reset.json()["status"] == "draft"
+    assert reset.json()["current_step_index"] == 0
+
+    # Get execution report
+    report = client.get(
+        f"/v1/processes/{process_id}/execution/report",
+        headers=auth_headers_a,
+    )
+    assert report.status_code == 200
+    rep_data = report.json()
+    assert rep_data["process_id"] == str(process_id)
+    assert "tools_invoked_total" in rep_data
+    assert "generated_at" in rep_data
+

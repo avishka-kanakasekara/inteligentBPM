@@ -1,5 +1,6 @@
 import {
   ApprovalSummarySchema,
+  AuditEventSchema,
   BudgetSchema,
   BillingPlansResponseSchema,
   BillingSubscriptionSnapshotSchema,
@@ -22,12 +23,14 @@ import {
   OrganizationSchema,
   PageSchema,
   PolicySchema,
+  ProcessRunSchema,
   ProcessSummarySchema,
   ReadinessResponseSchema,
   SupplierContactSchema,
   SupplierProductSchema,
   SupplierSchema,
   type ApprovalSummary,
+  type AuditEvent,
   type BillingPlansResponse,
   type BillingSubscriptionSnapshot,
   type BillingUsageResponse,
@@ -47,6 +50,7 @@ import {
   type Organization,
   type OrganizationProfile,
   type Policy,
+  type ProcessRun,
   type ProcessSummary,
   type ReadinessResponse,
   type Supplier,
@@ -482,8 +486,69 @@ export const apiClient = {
       { method: "POST" },
     );
   },
+  resumeExecution(processId: string): Promise<any> {
+    return request(`/processes/${processId}/execution/resume`, (res) => res, {
+      method: "POST",
+    });
+  },
+  pauseExecution(processId: string, reason?: string, runId?: string): Promise<any> {
+    return request(`/processes/${processId}/execution/pause`, (res) => res, {
+      method: "POST",
+      body: JSON.stringify({ reason, run_id: runId }),
+    });
+  },
+  cancelExecution(processId: string, reason?: string, runId?: string): Promise<any> {
+    return request(`/processes/${processId}/execution/cancel`, (res) => res, {
+      method: "POST",
+      body: JSON.stringify({ reason, run_id: runId }),
+    });
+  },
+  resetExecution(processId: string, runId?: string): Promise<any> {
+    return request(`/processes/${processId}/execution/reset`, (res) => res, {
+      method: "POST",
+      body: JSON.stringify({ run_id: runId }),
+    });
+  },
+  getExecutionReport(processId: string, runId?: string): Promise<any> {
+    const q = runId ? `?run_id=${encodeURIComponent(runId)}` : "";
+    return request(`/processes/${processId}/execution/report${q}`, (res) => res);
+  },
+  listTools(): Promise<any[]> {
+    return request("/tools", (res) => res as any[]);
+  },
+  listQuotations(processId: string): Promise<{ items: any[] }> {
+    return request(`/processes/${processId}/quotations`, (res) => res as { items: any[] });
+  },
+  compareQuotations(
+    processId: string,
+    quotationIds: string[],
+    explain = true,
+  ): Promise<any> {
+    return request(`/processes/${processId}/quotations/compare`, (res) => res, {
+      method: "POST",
+      body: JSON.stringify({ quotation_ids: quotationIds, explain }),
+    });
+  },
+  listPurchaseOrders(processId: string): Promise<{ items: any[] }> {
+    return request(`/processes/${processId}/purchase-orders`, (res) => res as { items: any[] });
+  },
+  submitPurchaseOrder(
+    purchaseOrderId: string,
+    options: { process_id: string; idempotency_key: string; dry_run?: boolean },
+  ): Promise<any> {
+    return request(`/purchase-orders/${purchaseOrderId}/submit`, (res) => res, {
+      method: "POST",
+      body: JSON.stringify(options),
+    });
+  },
   getExecution(processId: string): Promise<any> {
     return request(`/processes/${processId}/execution`, (res) => res);
+  },
+  completeProcess(processId: string): Promise<ProcessSummary> {
+    return request(`/processes/${processId}/complete`, (data) =>
+      ProcessSummarySchema.parse(data),
+      { method: "POST", body: "{}" },
+    );
   },
   proposeExecutionAction(processId: string, runId?: string): Promise<any> {
     const url = runId
@@ -590,6 +655,27 @@ export const apiClient = {
         body: JSON.stringify({ at_period_end }),
       },
     );
+  },
+  listAuditEvents(options?: { limit?: number; offset?: number; action?: string }): Promise<{
+    items: AuditEvent[];
+    meta: { total: number; limit: number; offset: number };
+  }> {
+    const params = new URLSearchParams();
+    if (options?.limit != null) params.set("limit", String(options.limit));
+    if (options?.offset != null) params.set("offset", String(options.offset));
+    if (options?.action) params.set("action", options.action);
+    const q = params.toString() ? `?${params.toString()}` : "";
+    return request(`/audit-events${q}`, (data) => PageSchema(AuditEventSchema).parse(data));
+  },
+  listProcessRuns(options?: { limit?: number; offset?: number }): Promise<{
+    items: ProcessRun[];
+    meta: { total: number; limit: number; offset: number };
+  }> {
+    const params = new URLSearchParams();
+    if (options?.limit != null) params.set("limit", String(options.limit));
+    if (options?.offset != null) params.set("offset", String(options.offset));
+    const q = params.toString() ? `?${params.toString()}` : "";
+    return request(`/process-runs${q}`, (data) => PageSchema(ProcessRunSchema).parse(data));
   },
   processRunEventsUrl(runId: string): string {
     if (useMock()) return `mock://process-runs/${runId}/events`;

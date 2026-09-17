@@ -15,7 +15,9 @@ from app.auth.deps import (
     require_permission,
 )
 from app.contracts.schemas import (
+    ExecutionControlRequest,
     ExecutionInvokeRequest,
+    ExecutionReportResponse,
     ExecutionStartRequest,
     ExecutionStateResponse,
     PurchaseOrderSubmitRequest,
@@ -132,6 +134,78 @@ async def resume_execution(
         correlation_id=get_correlation_id(request),
     )
     return ExecutionStateResponse.model_validate(result)
+
+
+@router.post("/processes/{process_id}/execution/pause", response_model=ExecutionStateResponse)
+async def pause_execution(
+    process_id: UUID,
+    request: Request,
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    org: Annotated[OrganizationContext, Depends(require_permission(perm.EXECUTION_RUN))],
+    body: ExecutionControlRequest | None = None,
+) -> ExecutionStateResponse:
+    service = ExecutionService(org.organization_id)
+    reason = body.reason if body and body.reason else "Paused by operator"
+    run_id = body.run_id if body else None
+    result = service.pause_execution(
+        process_id,
+        user_id=user.id,
+        correlation_id=get_correlation_id(request),
+        run_id=run_id,
+        reason=reason,
+    )
+    return ExecutionStateResponse.model_validate(result)
+
+
+@router.post("/processes/{process_id}/execution/cancel", response_model=ExecutionStateResponse)
+async def cancel_execution(
+    process_id: UUID,
+    request: Request,
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    org: Annotated[OrganizationContext, Depends(require_permission(perm.EXECUTION_RUN))],
+    body: ExecutionControlRequest | None = None,
+) -> ExecutionStateResponse:
+    service = ExecutionService(org.organization_id)
+    reason = body.reason if body and body.reason else "Cancelled by operator"
+    run_id = body.run_id if body else None
+    result = service.cancel_execution(
+        process_id,
+        user_id=user.id,
+        correlation_id=get_correlation_id(request),
+        run_id=run_id,
+        reason=reason,
+    )
+    return ExecutionStateResponse.model_validate(result)
+
+
+@router.post("/processes/{process_id}/execution/reset", response_model=ExecutionStateResponse)
+async def reset_execution(
+    process_id: UUID,
+    request: Request,
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    org: Annotated[OrganizationContext, Depends(require_permission(perm.EXECUTION_RUN))],
+    body: ExecutionControlRequest | None = None,
+) -> ExecutionStateResponse:
+    service = ExecutionService(org.organization_id)
+    run_id = body.run_id if body else None
+    result = service.reset_execution(
+        process_id,
+        user_id=user.id,
+        correlation_id=get_correlation_id(request),
+        run_id=run_id,
+    )
+    return ExecutionStateResponse.model_validate(result)
+
+
+@router.get("/processes/{process_id}/execution/report", response_model=ExecutionReportResponse)
+async def get_execution_report(
+    process_id: UUID,
+    org: Annotated[OrganizationContext, Depends(require_permission(perm.PROCESSES_READ))],
+    run_id: UUID | None = None,
+) -> ExecutionReportResponse:
+    service = ExecutionService(org.organization_id)
+    result = service.get_execution_summary_report(process_id, run_id=run_id)
+    return ExecutionReportResponse.model_validate(result)
 
 
 @router.post(

@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, beforeEach } from "vitest";
@@ -134,4 +134,55 @@ describe("approvals page", () => {
       expect(screen.getAllByText(/laptop procurement/i).length).toBeGreaterThan(0);
     });
   });
+
+  it("filters approvals by search, status, and date", async () => {
+    const user = userEvent.setup();
+    renderApp("/login");
+    await signInAs(user);
+    await user.click(await screen.findByRole("button", { name: /demo organization/i }));
+    await user.click(await screen.findByRole("link", { name: /^approvals$/i }));
+    expect(await screen.findByRole("heading", { name: /risk and approval center/i })).toBeInTheDocument();
+
+    // Verify filter controls are rendered
+    expect(screen.getByLabelText(/search approvals/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^date$/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/hour \/ time/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^status$/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/risk level/i)).toBeInTheDocument();
+
+    // Type in search query to filter by process name
+    const searchInput = screen.getByLabelText(/search approvals/i);
+    await user.type(searchInput, "laptop");
+
+    const getApprovalList = () => document.querySelector(".approval-list") as HTMLElement;
+
+    expect(within(getApprovalList()).getByText(/laptop procurement/i)).toBeInTheDocument();
+    expect(within(getApprovalList()).queryByText(/unapproved vendor purchase/i)).not.toBeInTheDocument();
+
+    // Clear search using filter pill
+    const clearQueryPill = screen.getByRole("button", { name: /query: "laptop" ✕/i });
+    await user.click(clearQueryPill);
+
+    // Both should be visible again
+    await waitFor(() => {
+      expect(within(getApprovalList()).getByText(/laptop procurement/i)).toBeInTheDocument();
+      expect(within(getApprovalList()).getByText(/unapproved vendor purchase/i)).toBeInTheDocument();
+    });
+
+    // Filter by status: rejected
+    const statusSelect = screen.getByLabelText(/^status$/i);
+    await user.selectOptions(statusSelect, "rejected");
+    await waitFor(() => {
+      expect(within(getApprovalList()).getByText(/off-cycle bonus payroll run/i)).toBeInTheDocument();
+      expect(within(getApprovalList()).queryByText(/laptop procurement/i)).not.toBeInTheDocument();
+    });
+
+    // Reset filters
+    const clearAllBtn = screen.getByRole("button", { name: /clear all filters/i });
+    await user.click(clearAllBtn);
+    await waitFor(() => {
+      expect(within(getApprovalList()).getByText(/laptop procurement/i)).toBeInTheDocument();
+    });
+  });
 });
+

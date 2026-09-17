@@ -177,6 +177,8 @@ export const ApprovalSummarySchema = z.object({
     )
     .nullish(),
   override_required: z.boolean().optional(),
+  created_at: z.string().nullish(),
+  updated_at: z.string().nullish(),
 });
 export type ApprovalSummary = z.infer<typeof ApprovalSummarySchema>;
 
@@ -554,3 +556,36 @@ export const BillingUsageResponseSchema = z.object({
   limits: z.record(z.string(), z.number().nullable()).optional(),
 });
 export type BillingUsageResponse = z.infer<typeof BillingUsageResponseSchema>;
+
+export const AuditEventSchema = z.object({
+  id: z.string().uuid(),
+  organization_id: z.string().uuid(),
+  actor_user_id: z.string().uuid().nullable().optional(),
+  action: z.string(),
+  resource_type: z.string(),
+  resource_id: z.string().uuid().nullable().optional(),
+  correlation_id: z.string().nullable().optional(),
+  payload: z.record(z.string(), z.unknown()).default({}),
+  created_at: z.string(),
+  result: z.string().nullable().optional(),
+});
+export type AuditEvent = z.infer<typeof AuditEventSchema>;
+
+export const ProcessRunSchema = z.object({
+  id: z.string().uuid(),
+  organization_id: z.string().uuid(),
+  process_id: z.string().uuid(),
+  process_version_id: z.string().uuid().nullable().optional(),
+  status: z.string(),
+  initiated_by_user_id: z.string().uuid().nullable().optional(),
+  correlation_id: z.string().nullable().optional(),
+  created_at: z.string(),
+  updated_at: z.string().optional(),
+  plan_snapshot_hash: z.string().nullable().optional(),
+  risk_snapshot_hash: z.string().nullable().optional(),
+  approval_id: z.string().uuid().nullable().optional(),
+  dry_run: z.boolean().optional().default(false),
+  current_step_index: z.number().optional().default(0),
+  pause_reason: z.string().nullable().optional(),
+});
+export type ProcessRun = z.infer<typeof ProcessRunSchema>;

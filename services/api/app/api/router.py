@@ -10,6 +10,7 @@ from app.api.health import router as health_router
 from app.api.v1 import (
     allocation,
     approvals,
+    audit,
     auth,
     billing,
     discovery,
@@ -38,6 +39,7 @@ api_router.include_router(risk.router)
 api_router.include_router(execution.router)
 api_router.include_router(approvals.router)
 api_router.include_router(process_runs.router)
+api_router.include_router(audit.router)
 api_router.include_router(billing.router)
 api_router.include_router(workspace.router)
 

@@ -930,6 +930,17 @@ class ProcessRepository(TenantRepository):
             persist_mutation(self.store, "process_versions", record.id)
         return record
 
+    def set_status(self, process_id: UUID, status: str) -> ProcessDefinitionRecord:
+        record = self.get(process_id)
+        record.status = status
+        record.updated_at = utcnow()
+        from app.config import get_settings
+        from app.database.postgres_persistence import persist_mutation
+
+        if get_settings().persistence_mode == "postgres":
+            persist_mutation(self.store, "processes", record.id)
+        return record
+
 
 class ApprovalRepository(TenantRepository):
     def list_all(self) -> list[ApprovalRecord]:
