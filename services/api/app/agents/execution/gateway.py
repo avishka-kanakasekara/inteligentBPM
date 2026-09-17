@@ -702,9 +702,34 @@ class ToolGateway:
             )
 
         if tool_name == "supplier.request_quote":
+            raw_sid = args.supplier_id
+            # Resolve supplier_id: accept UUID or supplier name/code
+            try:
+                UUID(raw_sid)  # validate it's already a UUID
+                resolved_sid = raw_sid
+            except (ValueError, AttributeError):
+                # Try name/code lookup
+                name_lower = (raw_sid or "").lower()
+                match = next(
+                    (
+                        s for s in SupplierRepository(org).list_all()
+                        if name_lower in s.name.lower()
+                        or (s.code and name_lower in s.code.lower())
+                    ),
+                    None,
+                )
+                if match is None:
+                    raise ToolGatewayError(
+                        ToolError(
+                            code=ToolErrorCode.VALIDATION_ERROR,
+                            message=f"No supplier found matching '{raw_sid}'. "
+                            "Use supplier.search to find the correct supplier_id first.",
+                        )
+                    )
+                resolved_sid = str(match.id)
             kwargs = {
                 "organization_id": org,
-                "supplier_id": args.supplier_id,
+                "supplier_id": resolved_sid,
                 "product_sku": args.product_sku,
                 "quantity": args.quantity,
                 "idempotency_key": args.idempotency_key,

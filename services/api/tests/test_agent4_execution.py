@@ -193,7 +193,7 @@ def test_tool_authorization_and_readonly(
         json={
             "tool_name": "email.send",
             "arguments": {
-                "to_employee_id": str(user_a_id),
+                "to_employee_id": "agent4@acme-test.internal",
                 "subject": "Hi",
                 "body": "Hello",
                 "idempotency_key": "email-deny-001",
@@ -222,7 +222,7 @@ def test_approval_gate_for_email_and_po(
         json={
             "tool_name": "email.send",
             "arguments": {
-                "to_employee_id": str(user_a_id),
+                "to_employee_id": "agent4@acme-test.internal",
                 "subject": "Need quotes",
                 "body": "Please send quotes",
                 "idempotency_key": "email-gate-001",
@@ -247,7 +247,7 @@ def test_approval_gate_for_email_and_po(
         json={
             "tool_name": "email.send",
             "arguments": {
-                "to_employee_id": str(user_a_id),
+                "to_employee_id": "procurement@acme-test.internal",
                 "subject": "Need quotes",
                 "body": "Please send quotes",
                 "idempotency_key": "email-ok-001",
@@ -271,7 +271,7 @@ def test_idempotency_and_email_duplicate_prevention(
     payload = {
         "tool_name": "email.send",
         "arguments": {
-            "to_employee_id": str(user_a_id),
+            "to_employee_id": "agent4@acme-test.internal",
             "subject": "Once",
             "body": "Only once",
             "idempotency_key": "email-dup-key-001",
@@ -427,7 +427,7 @@ def test_provider_failure_pauses_run(
         process_id,
         tool_name="email.send",
         arguments={
-            "to_employee_id": str(user_a_id),
+            "to_employee_id": "agent4@acme-test.internal",
             "subject": "fail",
             "body": "provider down",
             "idempotency_key": "email-fail-001",
@@ -513,7 +513,7 @@ def test_dry_run_mode(
         json={
             "tool_name": "email.send",
             "arguments": {
-                "to_employee_id": str(user_a_id),
+                "to_employee_id": "agent4@acme-test.internal",
                 "subject": "dry",
                 "body": "run",
                 "idempotency_key": "dry-email-001",
@@ -557,7 +557,7 @@ def test_arbitrary_http_forbidden(org_a: UUID, user_a_id: UUID) -> None:
     inv = gw.invoke(
         tool_name="email.create_draft",
         arguments={
-            "to_employee_id": str(user_a_id),
+            "to_employee_id": "agent4@acme-test.internal",
             "subject": "x",
             "body": "y",
             "idempotency_key": "url-test-001",

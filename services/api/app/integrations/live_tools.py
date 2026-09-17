@@ -76,29 +76,33 @@ class LiveSupplierProvider(MockSupplierProvider):
 
         outbound_message_id = None
         email_status = None
+        email_error = None
         if email_addr:
-            msg = self.email.send_email(
-                organization_id=organization_id,
-                to=[email_addr],
-                subject=record["subject"],
-                body=record["body"],
-                idempotency_key=f"{idempotency_key}:email",
-            )
-            outbound_message_id = msg.provider_message_id or msg.id
-            email_status = msg.status
-            record["outbound_message_id"] = outbound_message_id
-            record["email_status"] = email_status
-            record["status"] = "sent"
-            record["sent_at"] = _now_iso()
+            try:
+                msg = self.email.send_email(
+                    organization_id=organization_id,
+                    to=[email_addr],
+                    subject=record["subject"],
+                    body=record["body"],
+                    idempotency_key=f"{idempotency_key}:email",
+                )
+                outbound_message_id = msg.provider_message_id or msg.id
+                email_status = msg.status
+                record["outbound_message_id"] = outbound_message_id
+                record["email_status"] = email_status
+                record["status"] = "sent"
+                record["sent_at"] = _now_iso()
+            except Exception as exc:  # noqa: BLE001
+                email_error = str(exc)
+                email_status = "failed"
+                record["email_status"] = "failed"
+                record["email_error"] = email_error
+                record["status"] = "email_failed"
         else:
-            sent = self.send_quotation_request(
-                organization_id=organization_id,
-                draft_id=draft.id,
-                idempotency_key=f"{idempotency_key}:send",
-                authorized=True,
-            )
-            outbound_message_id = sent.outbound_message_id
-            record["status"] = sent.status
+            # No contact email found — record clearly and skip send
+            email_status = "no_contact_email"
+            record["status"] = "no_contact_email"
+            record["email_status"] = "no_contact_email"
 
         return {
             "id": draft.id,
@@ -114,6 +118,7 @@ class LiveSupplierProvider(MockSupplierProvider):
             "idempotency_key": idempotency_key,
             "outbound_message_id": outbound_message_id,
             "email_status": email_status,
+            "email_error": email_error,
             "mock": False,
             "provider": self.name,
         }
@@ -223,8 +228,12 @@ class LivePurchasingProvider(MockPurchasingProvider):
                     po["confirmation_email_to"] = to_email
                     result["confirmation_email_to"] = to_email
                     result["confirmation_email_status"] = msg.status
-            except Exception:
-                pass
+                else:
+                    result["confirmation_email_status"] = "no_contact_email"
+            except Exception as exc:  # noqa: BLE001
+                # Surface the error in the result so Agent 4 can report it
+                result["confirmation_email_status"] = "failed"
+                result["confirmation_email_error"] = str(exc)
             result["external_ref"] = po["external_ref"]
             result["po_number"] = po.get("po_number")
         result["mock"] = False
