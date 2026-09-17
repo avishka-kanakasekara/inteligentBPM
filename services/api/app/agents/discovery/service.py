@@ -786,6 +786,9 @@ class DiscoveryService:
             version_id,
             confirmed_by_user_id=user_id,
         )
+        # Advance the process status so it becomes visible on Active Runs.
+        # Without this, the process stays "draft" forever after plan confirmation.
+        self.processes.set_status(process_id, "plan_ready")
         self._emit(
             process_id,
             {
