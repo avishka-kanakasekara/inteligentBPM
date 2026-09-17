@@ -81,15 +81,39 @@ def _extract_amount(plan: ProcessPlan, explicit: float | None) -> float | None:
 
 
 def _count_quotes_in_plan(plan: ProcessPlan, explicit: int | None) -> int | None:
+    import re as _re
+
     if explicit is not None:
         return explicit
     blob = (plan.goal + " " + plan.reasoning_summary).lower()
     for step in plan.steps:
         blob += " " + step.description.lower()
+
+    # Explicit quote-count phrases
     if "dual quote" in blob or "two quote" in blob or "2 quote" in blob:
         return 2
     if "three quote" in blob or "3 quote" in blob:
         return 3
+
+    # Supplier-count phrases: "3 approved suppliers", "three suppliers", etc.
+    sup_match = _re.search(r"(\d+)\s+(?:approved\s+|preferred\s+)?suppliers?", blob)
+    if sup_match:
+        count = int(sup_match.group(1))
+        if count >= 2:
+            return count
+    word_counts = {"two": 2, "three": 3, "four": 4, "five": 5}
+    for word, val in word_counts.items():
+        if _re.search(rf"{word}\s+(?:approved\s+|preferred\s+)?suppliers?", blob):
+            return val
+
+    # "at least N" pattern — covers "at least 3 approved suppliers"
+    atleast_match = _re.search(r"at\s+least\s+(\d+)", blob)
+    if atleast_match:
+        count = int(atleast_match.group(1))
+        if count >= 2:
+            return count
+
+    # Generic fallback: plan mentions quoting but count is ambiguous → treat as 1
     if "quote" in blob or "quotation" in blob:
         return 1
     return None
