@@ -18,7 +18,7 @@ from app.database.memory import (
     SupplierRecord,
     get_memory_store,
 )
-from app.database.seed_demo import seed_demo_processes
+from app.database.seed_demo import seed_agent4_demo_process, seed_demo_processes
 
 DEFAULT_ORG_ID = UUID("76ec608f-37a4-45fa-bb58-fb81c0710720")
 DEFAULT_USER_ID = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
@@ -119,9 +119,10 @@ def seed_sample_company(
 
     # Idempotent: if company directory already present, still ensure Kanaka demo supplier
     if EMP_OWNER in store.employees and SUP_NORTHWIND in store.suppliers:
-        _ensure_kanaka_supplier(store, organization_id=organization_id, now=now)
         if include_process:
+            _ensure_kanaka_supplier(store, organization_id=organization_id, now=now)
             seed_demo_processes(store, organization_id=organization_id, user_id=user_id)
+            seed_agent4_demo_process(store, organization_id=organization_id, user_id=user_id)
         return
 
     org = store.organizations.get(organization_id)
@@ -628,3 +629,4 @@ def seed_sample_company(
 
     if include_process:
         seed_demo_processes(store, organization_id=organization_id, user_id=user_id)
+        seed_agent4_demo_process(store, organization_id=organization_id, user_id=user_id)

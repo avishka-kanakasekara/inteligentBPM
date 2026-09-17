@@ -85,3 +85,137 @@ def seed_demo_processes(
         plan_snapshot=plan_to_snapshot(plan),
         status="draft",
     )
+
+
+AGENT4_PROCESS_NAME = "Enterprise Hardware Procurement (Agent 4 Ready)"
+AGENT4_PROCESS_DESC = "Pre-approved procurement process ready for autonomous or step-by-step execution by Agent 4."
+
+
+def seed_agent4_demo_process(
+    store: MemoryStore | None = None,
+    *,
+    organization_id: UUID = DEFAULT_ORG_ID,
+    user_id: UUID = DEFAULT_USER_ID,
+) -> None:
+    """Seed a fully pre-approved process ready to test Agent 4 execution."""
+    from app.agents.allocation.service import AllocationService
+    from app.agents.discovery.models import ActionType, ProcessPlan, ProcessStep, RiskLevel
+    from app.agents.risk.models import AnalyzeRiskRequest
+    from app.agents.risk.service import RiskAnalysisService
+    from app.contracts.common import utcnow
+    from app.domain.enums import ApprovalStatus
+
+    store = store or get_memory_store()
+    repo = ProcessRepository(organization_id, store)
+
+    if any(p.name == AGENT4_PROCESS_NAME for p in repo.list_all()):
+        return
+
+    proc = repo.create(
+        name=AGENT4_PROCESS_NAME,
+        description=AGENT4_PROCESS_DESC,
+        created_by_user_id=user_id,
+    )
+
+    steps = [
+        ProcessStep(
+            step_id="step_discovery",
+            action_type=ActionType.COLLECT_INFO,
+            title="Identify Staff & Suppliers",
+            description="Discover procurement officers, IT managers, and approved hardware vendors in company directory.",
+            required_resources=["employee", "manager", "supplier"],
+            allowed_tools=[
+                "company.employee_lookup",
+                "company.manager_lookup",
+                "supplier.search",
+                "supplier.contact_lookup",
+                "supplier.approved_status",
+            ],
+            success_criteria=["Suppliers verified", "Staff identified"],
+            risk_level=RiskLevel.LOW,
+        ),
+        ProcessStep(
+            step_id="step_rfq",
+            action_type=ActionType.HUMAN_TASK,
+            title="Request & Collect Dual Quotations",
+            description="Issue formal RFQs to approved vendors and extract quotation details for comparison.",
+            required_resources=["supplier", "procurement_officer"],
+            allowed_tools=[
+                "supplier.request_quote",
+                "supplier.collect_quote",
+                "quotation.extract",
+                "quotation.normalize",
+                "quotation.compare",
+                "email.send",
+                "email.create_draft",
+            ],
+            success_criteria=["Dual quotes obtained and ranked"],
+            risk_level=RiskLevel.MEDIUM,
+        ),
+        ProcessStep(
+            step_id="step_order_and_notify",
+            action_type=ActionType.INTEGRATION,
+            title="Issue Purchase Order & Stakeholder Notice",
+            description="Generate purchase order, dispatch supplier contract, and notify management and employees.",
+            required_resources=["supplier", "finance_manager"],
+            allowed_tools=[
+                "purchase_order.create_draft",
+                "purchase_order.submit",
+                "document.generate",
+                "notification.send",
+                "calendar.create_event",
+                "task.assign",
+            ],
+            success_criteria=["Purchase order submitted", "Confirmation notices dispatched"],
+            risk_level=RiskLevel.HIGH,
+        ),
+    ]
+
+    plan = ProcessPlan(
+        goal="Procure 5 high-performance laptops with dual supplier quotations under $2,500 budget",
+        steps=steps,
+    )
+
+    version = repo.create_version(
+        proc.id,
+        plan_snapshot=plan_to_snapshot(plan),
+        status="confirmed",
+    )
+
+    # 1. Run Agent 2 (Allocation)
+    try:
+        alloc_service = AllocationService(organization_id)
+        alloc_service.allocate(
+            proc.id,
+            user_id=user_id,
+            correlation_id="seed-agent4",
+            permissions=permissions_for_role(OrgRole.OWNER),
+        )
+    except Exception:
+        pass
+
+    # 2. Run Agent 3 (Risk Analysis)
+    try:
+        risk_service = RiskAnalysisService(organization_id)
+        risk = risk_service.analyze(
+            proc.id,
+            user_id=user_id,
+            correlation_id="seed-agent4",
+            permissions=permissions_for_role(OrgRole.OWNER),
+            request=AnalyzeRiskRequest(spending_amount=2500, quotation_count=2),
+        )
+
+        # 3. Create & Approve package
+        package = risk_service.create_approval_package(
+            proc.id,
+            user_id=user_id,
+            correlation_id="seed-agent4",
+        )
+        if package.id in store.approvals:
+            record = store.approvals[package.id]
+            record.status = ApprovalStatus.APPROVED
+            record.decided_by_user_id = user_id
+            record.decision_note = "Pre-approved sample process for Agent 4 execution testing."
+            record.updated_at = utcnow()
+    except Exception:
+        pass

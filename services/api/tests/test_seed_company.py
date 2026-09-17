@@ -41,7 +41,7 @@ def test_seed_sample_company_is_idempotent() -> None:
 
     assert len(store.employees) == 8
     assert EMP_OWNER in store.employees
-    assert len(store.suppliers) == 4
+    assert len(store.suppliers) == 5
     assert SUP_NORTHWIND in store.suppliers
     assert len(store.departments) == 5
     assert len(store.policies) == 3
