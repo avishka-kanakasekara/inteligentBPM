@@ -13,10 +13,18 @@ import { useProcessRunEvents } from "../../hooks/useProcessRunEvents";
 import { useOrganization } from "../../providers/OrganizationProvider";
 
 const ACTIVE_PROCESS_STATUSES = new Set([
+  "discovering",
+  "plan_ready",
+  "allocating",
+  "allocated",
+  "analyzing_risk",
+  "risk_complete",
+  "awaiting_approval",
+  "approved",
   "executing",
   "paused",
   "blocked",
-  "approved",
+  "failed",
 ]);
 
 const ACTIVE_RUN_STATUSES = new Set([
@@ -145,7 +153,8 @@ export function ActiveRunsPage() {
 
   const executing = items.filter((i) => (i.run?.status || i.process.status) === "executing").length;
   const paused = items.filter((i) => (i.run?.status || i.process.status) === "paused").length;
-  const blocked = items.filter((i) => (i.run?.status || i.process.status) === "blocked").length;
+  const blocked = items.filter((i) => ["blocked", "failed"].includes(i.run?.status || i.process.status)).length;
+  const awaiting = items.filter((i) => ["awaiting_approval", "approved"].includes(i.process.status)).length;
   const completingId =
     completeMutation.isPending && typeof completeMutation.variables === "string"
       ? completeMutation.variables
@@ -186,9 +195,9 @@ export function ActiveRunsPage() {
 
       <dl className="kpi-band" style={{ marginBottom: "1.25rem" }}>
         <div>
-          <dt className="kpi-label">In progress</dt>
+          <dt className="kpi-label">In pipeline</dt>
           <dd className="kpi-value">{items.length}</dd>
-          <p className="kpi-hint">Active processes & runs</p>
+          <p className="kpi-hint">All active processes</p>
         </div>
         <div>
           <dt className="kpi-label">Executing</dt>
@@ -196,21 +205,21 @@ export function ActiveRunsPage() {
           <p className="kpi-hint">Gateway tools in flight</p>
         </div>
         <div>
-          <dt className="kpi-label">Paused</dt>
-          <dd className="kpi-value">{paused}</dd>
-          <p className="kpi-hint">Waiting on human/signal</p>
+          <dt className="kpi-label">Awaiting approval</dt>
+          <dd className="kpi-value">{awaiting}</dd>
+          <p className="kpi-hint">Pending human decision</p>
         </div>
         <div>
-          <dt className="kpi-label">Blocked</dt>
-          <dd className="kpi-value">{blocked}</dd>
-          <p className="kpi-hint">Needs resolution</p>
+          <dt className="kpi-label">Paused / Blocked</dt>
+          <dd className="kpi-value">{paused + blocked}</dd>
+          <p className="kpi-hint">Needs attention</p>
         </div>
       </dl>
 
       {items.length === 0 ? (
         <EmptyState
-          title="No active runs"
-          description="Approved or executing processes appear here. Start from Discovery or open Approvals."
+          title="No active processes"
+          description="Processes appear here after discovery completes. Start a new process from Discovery."
         />
       ) : (
         <div className="runs-layout">
