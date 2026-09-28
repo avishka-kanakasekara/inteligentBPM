@@ -421,9 +421,11 @@ class DiscoveryService:
                     goal = msg.content
                     break
 
+        session = self.get_or_create_session(process_id, user_id=user_id)
+        effective_document_ids = list(document_ids or session.document_ids)
         doc_context, source_refs, _flags = self._document_context(
             query=goal,
-            document_ids=list(document_ids or []),
+            document_ids=effective_document_ids,
             user_id=user_id,
         )
         revision_note = ""

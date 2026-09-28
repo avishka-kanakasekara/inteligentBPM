@@ -6,9 +6,9 @@ EmailProvider for outbound communication (same path as email.send).
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from app.contracts.common import utcnow
 from app.database.memory import get_memory_store, new_id
@@ -48,12 +48,31 @@ class LiveSupplierProvider(MockSupplierProvider):
         body: str | None = None,
         contact_email: str | None = None,
     ) -> dict[str, Any]:
-        contacts = self.list_contacts(organization_id=organization_id, supplier_id=supplier_id)
+        # Resolve supplier by UUID or name/code
+        sid_raw = str(supplier_id).strip()
+        supplier = None
+        try:
+            supplier = SupplierRepository(organization_id).get(UUID(sid_raw))
+            resolved_sid = str(supplier.id)
+        except Exception:
+            sid_lower = sid_raw.lower()
+            supplier = next(
+                (
+                    s
+                    for s in SupplierRepository(organization_id).list_all()
+                    if sid_lower in s.name.lower() or (s.code and sid_lower in s.code.lower())
+                ),
+                None,
+            )
+            if supplier is None:
+                raise LookupError(f"Supplier not found for '{supplier_id}'") from None
+            resolved_sid = str(supplier.id)
+
+        contacts = self.list_contacts(organization_id=organization_id, supplier_id=resolved_sid)
         email_addr = contact_email or (contacts[0]["email"] if contacts else None)
-        supplier = SupplierRepository(organization_id).get(UUID(supplier_id))
         draft = self.create_quotation_request_draft(
             organization_id=organization_id,
-            supplier_id=supplier_id,
+            supplier_id=resolved_sid,
             product_sku=product_sku,
             quantity=float(quantity),
             contact_email=email_addr,
@@ -138,10 +157,28 @@ class LiveSupplierProvider(MockSupplierProvider):
         result["mock"] = False
         result["provider"] = self.name
         store = get_memory_store()
-        qid = UUID(result["id"])
-        if qid in store.quotations:
-            store.quotations[qid]["mock"] = False
-            store.quotations[qid]["provider"] = self.name
+        try:
+            qid = UUID(result["id"])
+            if qid in store.quotations:
+                quote_rec = store.quotations[qid]
+                quote_rec["mock"] = False
+                quote_rec["provider"] = self.name
+                req = store.quote_requests.get(UUID(request_id))
+                if req:
+                    quote_rec["product_sku"] = req.get("product_sku")
+                    quote_rec["process_id"] = req.get("process_id")
+                    quote_rec["process_run_id"] = req.get("process_run_id")
+                    result["process_id"] = req.get("process_id")
+                    result["process_run_id"] = req.get("process_run_id")
+                    sid_str = str(req.get("supplier_id") or "")
+                    try:
+                        sup = SupplierRepository(organization_id).get(UUID(sid_str))
+                        quote_rec["supplier_name"] = sup.name
+                        result["supplier_name"] = sup.name
+                    except Exception:
+                        pass
+        except Exception:
+            pass
         return result
 
 
@@ -164,9 +201,28 @@ class LivePurchasingProvider(MockPurchasingProvider):
         lines: list[dict[str, Any]],
         idempotency_key: str,
     ) -> dict[str, Any]:
+        # Safely resolve supplier_id if a name/code was provided
+        sid_raw = str(supplier_id).strip()
+        resolved_sid = sid_raw
+        try:
+            UUID(sid_raw)
+        except Exception:
+            sup_match = next(
+                (
+                    s
+                    for s in SupplierRepository(organization_id).list_all()
+                    if sid_raw.lower() in s.name.lower() or (
+                        s.code and sid_raw.lower() in s.code.lower()
+                    )
+                ),
+                None,
+            )
+            if sup_match:
+                resolved_sid = str(sup_match.id)
+
         result = super().create_draft(
             organization_id=organization_id,
-            supplier_id=supplier_id,
+            supplier_id=resolved_sid,
             amount_total=amount_total,
             currency_code=currency_code,
             lines=lines,
@@ -200,14 +256,38 @@ class LivePurchasingProvider(MockPurchasingProvider):
         if po:
             po["mock"] = False
             po["provider"] = self.name
+            if not po.get("po_number"):
+                po["po_number"] = f"PO-{purchase_order_id[:8].upper()}"
             po["external_ref"] = po.get("po_number") or f"PO-{purchase_order_id[:8].upper()}"
             po["submitted_at"] = _now_iso()
-            # Email supplier contact a PO confirmation when possible
+            result["po_number"] = po["po_number"]
+            # Safely resolve supplier contact email
             try:
-                contacts = SupplierContactRepository(organization_id).list_all(
-                    supplier_id=UUID(str(po["supplier_id"]))
-                )
-                to_email = next((c.email for c in contacts if c.email), None)
+                sid_val = str(po.get("supplier_id") or "")
+                sid_uuid: UUID | None = None
+                try:
+                    sid_uuid = UUID(sid_val)
+                except Exception:
+                    sup_match = next(
+                        (
+                            s
+                            for s in SupplierRepository(organization_id).list_all()
+                            if sid_val.lower() in s.name.lower()
+                            or (s.code and sid_val.lower() in s.code.lower())
+                        ),
+                        None,
+                    )
+                    if sup_match:
+                        sid_uuid = sup_match.id
+
+                if sid_uuid:
+                    contacts = SupplierContactRepository(organization_id).list_all(
+                        supplier_id=sid_uuid
+                    )
+                    to_email = next((c.email for c in contacts if c.email), None)
+                else:
+                    to_email = None
+
                 if to_email:
                     subject = f"Purchase Order {po['external_ref']} submitted"
                     body = (
@@ -360,11 +440,12 @@ class LiveCalendarAdapter:
             try:
                 start = datetime.fromisoformat(start_at.replace("Z", "+00:00"))
             except Exception:
-                start = datetime.now(timezone.utc)
+                start = datetime.now(UTC)
             end_at = (start + timedelta(hours=1)).isoformat()
 
         event_id = new_id()
-        record = {
+        invites_sent: list[dict[str, Any]] = []
+        record: dict[str, Any] = {
             "id": str(event_id),
             "organization_id": str(organization_id),
             "title": title,
@@ -377,7 +458,7 @@ class LiveCalendarAdapter:
             "mock": False,
             "idempotency_key": idempotency_key,
             "created_at": _now_iso(),
-            "invites_sent": [],
+            "invites_sent": invites_sent,
         }
         for addr in attendee_emails:
             try:
@@ -394,11 +475,11 @@ class LiveCalendarAdapter:
                     ),
                     idempotency_key=f"{idempotency_key}:invite:{addr}",
                 )
-                record["invites_sent"].append(
+                invites_sent.append(
                     {"to": addr, "status": msg.status, "message_id": msg.id}
                 )
             except Exception as exc:  # noqa: BLE001
-                record["invites_sent"].append({"to": addr, "status": "failed", "error": str(exc)})
+                invites_sent.append({"to": addr, "status": "failed", "error": str(exc)})
 
         store.calendar_events[event_id] = record
         return record

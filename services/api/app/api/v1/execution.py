@@ -95,16 +95,23 @@ async def advance_execution(
     request: Request,
     user: Annotated[AuthenticatedUser, Depends(get_current_user)],
     org: Annotated[OrganizationContext, Depends(require_permission(perm.EXECUTION_RUN))],
-    max_steps: int = 10,
+    max_steps: int = 25,
 ) -> ExecutionStateResponse:
     """Continue Gemini tool selection + real tool execution for an existing run."""
+    effective_max = max_steps
+    try:
+        body = await request.json()
+        if isinstance(body, dict) and "max_steps" in body:
+            effective_max = int(body["max_steps"])
+    except Exception:
+        pass
     service = ExecutionService(org.organization_id)
     result = service.advance_execution(
         process_id,
         user_id=user.id,
         correlation_id=get_correlation_id(request),
         permissions=org.permissions,
-        max_steps=max_steps,
+        max_steps=effective_max,
     )
     return ExecutionStateResponse.model_validate(result)
 

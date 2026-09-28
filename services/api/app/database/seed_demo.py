@@ -88,7 +88,9 @@ def seed_demo_processes(
 
 
 AGENT4_PROCESS_NAME = "Enterprise Hardware Procurement (Agent 4 Ready)"
-AGENT4_PROCESS_DESC = "Pre-approved procurement process ready for autonomous or step-by-step execution by Agent 4."
+AGENT4_PROCESS_DESC = (
+    "Pre-approved procurement process ready for autonomous or step-by-step execution by Agent 4."
+)
 
 
 def seed_agent4_demo_process(
@@ -122,7 +124,10 @@ def seed_agent4_demo_process(
             step_id="step_discovery",
             action_type=ActionType.COLLECT_INFO,
             title="Identify Staff & Suppliers",
-            description="Discover procurement officers, IT managers, and approved hardware vendors in company directory.",
+            description=(
+                "Discover procurement officers, IT managers, and approved hardware vendors "
+                "in company directory."
+            ),
             required_resources=["employee", "manager", "supplier"],
             allowed_tools=[
                 "company.employee_lookup",
@@ -138,7 +143,10 @@ def seed_agent4_demo_process(
             step_id="step_rfq",
             action_type=ActionType.HUMAN_TASK,
             title="Request & Collect Dual Quotations",
-            description="Issue formal RFQs to approved vendors and extract quotation details for comparison.",
+            description=(
+                "Issue formal RFQs to approved vendors and extract quotation details "
+                "for comparison."
+            ),
             required_resources=["supplier", "procurement_officer"],
             allowed_tools=[
                 "supplier.request_quote",
@@ -156,13 +164,17 @@ def seed_agent4_demo_process(
             step_id="step_order_and_notify",
             action_type=ActionType.INTEGRATION,
             title="Issue Purchase Order & Stakeholder Notice",
-            description="Generate purchase order, dispatch supplier contract, and notify management and employees.",
+            description=(
+                "Generate purchase order, dispatch supplier contract, and notify management "
+                "and employees (email to kadavishkakanakasekara@gmail.com)."
+            ),
             required_resources=["supplier", "finance_manager"],
             allowed_tools=[
                 "purchase_order.create_draft",
                 "purchase_order.submit",
                 "document.generate",
                 "notification.send",
+                "email.send",
                 "calendar.create_event",
                 "task.assign",
             ],
@@ -176,7 +188,7 @@ def seed_agent4_demo_process(
         steps=steps,
     )
 
-    version = repo.create_version(
+    repo.create_version(
         proc.id,
         plan_snapshot=plan_to_snapshot(plan),
         status="confirmed",
@@ -197,7 +209,7 @@ def seed_agent4_demo_process(
     # 2. Run Agent 3 (Risk Analysis)
     try:
         risk_service = RiskAnalysisService(organization_id)
-        risk = risk_service.analyze(
+        risk_service.analyze(
             proc.id,
             user_id=user_id,
             correlation_id="seed-agent4",

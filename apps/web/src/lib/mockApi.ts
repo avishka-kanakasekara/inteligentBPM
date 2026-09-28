@@ -1154,11 +1154,15 @@ export const mockApi = {
       return found as T;
     }
     if (path.includes("/chat") && method === "POST") {
+      const attached = Array.isArray(body.document_ids) ? body.document_ids.length : 0;
       return {
         id: "msg-1",
         role: "assistant",
-        content: "I am Agent 1 (Process Discovery). I have analyzed your requirements.",
+        content: attached
+          ? `I am Agent 1 (Process Discovery). I received your message and ${attached} attached document${attached === 1 ? "" : "s"}.`
+          : "I am Agent 1 (Process Discovery). I have analyzed your requirements.",
         clarifying_questions: [],
+        document_ids: attached ? body.document_ids : [],
         intent: { goal: String(body.message || "") },
       } as T;
     }

@@ -581,7 +581,7 @@ export function ProcessStatusCard({ process }: { process: ProcessSummary }) {
           onClick={() =>
             void runAction(
               "risk",
-              () => apiClient.analyzeRisk(process.id),
+              () => apiClient.analyzeRisk(process.id, { quotation_count: 2 }),
               "Agent 3 completed — see risk details above.",
             )
           }

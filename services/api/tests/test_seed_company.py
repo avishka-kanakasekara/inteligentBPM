@@ -39,7 +39,7 @@ def test_seed_sample_company_is_idempotent() -> None:
     seed_sample_company(store, organization_id=org_id, user_id=user_id, include_process=False)
     seed_sample_company(store, organization_id=org_id, user_id=user_id, include_process=False)
 
-    assert len(store.employees) == 8
+    assert len(store.employees) == 9
     assert EMP_OWNER in store.employees
     assert len(store.suppliers) == 5
     assert SUP_NORTHWIND in store.suppliers

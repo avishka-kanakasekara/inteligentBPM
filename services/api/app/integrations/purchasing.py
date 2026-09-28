@@ -35,8 +35,10 @@ class MockPurchasingProvider:
                 return _po_from_record(existing)
 
         po_id = new_id()
+        po_num = f"PO-{str(po_id)[:8].upper()}"
         record = {
             "id": str(po_id),
+            "po_number": po_num,
             "organization_id": str(organization_id),
             "supplier_id": supplier_id,
             "amount_total": amount_total,
@@ -95,7 +97,9 @@ class MockPurchasingProvider:
         po["status"] = "submitted"
         po["submitted"] = True
         po["submit_idempotency_key"] = idempotency_key
-        po["external_ref"] = f"MOCK-PO-{purchase_order_id[:8]}"
+        if not po.get("po_number"):
+            po["po_number"] = f"PO-{purchase_order_id[:8].upper()}"
+        po["external_ref"] = po.get("po_number") or f"MOCK-PO-{purchase_order_id[:8]}"
         po["mock"] = True
         return _po_from_record(po)
 

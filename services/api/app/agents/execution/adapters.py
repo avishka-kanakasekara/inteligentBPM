@@ -12,7 +12,7 @@ from uuid import UUID
 
 from app.config import get_settings
 from app.integrations.email import MockEmailProvider
-from app.integrations.errors import ProviderError
+from app.integrations.errors import InvalidRecipientError, ProviderError
 from app.integrations.factory import build_providers
 from app.integrations.live_tools import (
     LiveCalendarAdapter,
@@ -25,7 +25,6 @@ from app.integrations.live_tools import (
 from app.integrations.protocols import EmailProvider
 from app.integrations.purchasing import MockPurchasingProvider
 from app.integrations.supplier import MockSupplierProvider
-from app.integrations.errors import InvalidRecipientError
 from app.repositories.memory_repos import EmployeeRepository, SupplierContactRepository
 
 # Re-export provider failure alias used by gateway
