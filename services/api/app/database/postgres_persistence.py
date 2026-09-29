@@ -169,22 +169,7 @@ def hydrate_store(store: MemoryStore) -> None:
                 updated_at=row.updated_at,
             )
         for row in session.scalars(select(EmployeeModel)).all():
-            store.employees[row.id] = EmployeeRecord(
-                id=row.id,
-                organization_id=row.organization_id,
-                full_name=row.full_name,
-                email=row.email,
-                title=row.title,
-                department_id=row.department_id,
-                is_manager=bool(row.is_manager),
-                status=row.status,
-                created_at=row.created_at,
-                updated_at=row.updated_at,
-                employee_code=row.employee_code,
-                role_code=row.role_code,
-                approval_authority_limit=_as_float(row.approval_authority_limit),
-                approval_authority_currency=row.approval_authority_currency or "USD",
-            )
+            store.employees[row.id] = _employee_from_row(row)
         for row in session.scalars(select(EmployeeManagerLinkModel)).all():
             store.employee_manager_links[row.id] = EmployeeManagerLinkRecord(
                 id=row.id,
@@ -197,18 +182,7 @@ def hydrate_store(store: MemoryStore) -> None:
                 updated_at=row.updated_at,
             )
         for row in session.scalars(select(SupplierModel)).all():
-            store.suppliers[row.id] = SupplierRecord(
-                id=row.id,
-                organization_id=row.organization_id,
-                name=row.name,
-                code=row.code,
-                status=row.status,
-                created_at=row.created_at,
-                updated_at=row.updated_at,
-                approval_status=row.approval_status,
-                website=row.website,
-                country_code=row.country_code,
-            )
+            store.suppliers[row.id] = _supplier_from_row(row)
         for row in session.scalars(select(SupplierContactModel)).all():
             store.supplier_contacts[row.id] = SupplierContactRecord(
                 id=row.id,
@@ -645,6 +619,66 @@ def persist_cost_center(store: MemoryStore, record: CostCenterRecord) -> None:
         )
 
 
+def _text_list(value: Any) -> list[str]:
+    if not value:
+        return []
+    return [str(item) for item in value]
+
+
+def _employee_from_row(row: EmployeeModel) -> EmployeeRecord:
+    return EmployeeRecord(
+        id=row.id,
+        organization_id=row.organization_id,
+        full_name=row.full_name,
+        email=row.email,
+        title=row.title,
+        department_id=row.department_id,
+        is_manager=bool(row.is_manager),
+        status=row.status,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+        employee_code=row.employee_code,
+        role_code=row.role_code,
+        approval_authority_limit=_as_float(row.approval_authority_limit),
+        approval_authority_currency=row.approval_authority_currency or "USD",
+        phone=row.phone,
+        employment_type=row.employment_type or "full_time",
+        join_date=row.join_date,
+        manager_employee_id=row.manager_employee_id,
+        team=row.team,
+        business_unit=row.business_unit,
+        location=row.location,
+        reporting_level=int(row.reporting_level or 1),
+        primary_skills=_text_list(row.primary_skills),
+        secondary_skills=_text_list(row.secondary_skills),
+        certifications=_text_list(row.certifications),
+        years_of_experience=_as_float(row.years_of_experience),
+        skill_level=row.skill_level or "intermediate",
+        availability_percent=float(
+            100 if row.availability_percent is None else row.availability_percent
+        ),
+        weekly_capacity_hours=float(
+            40 if row.weekly_capacity_hours is None else row.weekly_capacity_hours
+        ),
+        current_workload_percent=float(
+            row.current_workload_percent if row.current_workload_percent is not None else 0
+        ),
+        cost_per_hour=_as_float(row.cost_per_hour),
+        monthly_cost=_as_float(row.monthly_cost),
+        max_allocation_percent=float(
+            row.max_allocation_percent if row.max_allocation_percent is not None else 100
+        ),
+        approval_tier=row.approval_tier or "none",
+        can_approve_procurement=bool(row.can_approve_procurement),
+        can_approve_budget=bool(row.can_approve_budget),
+        delegation_authority=bool(row.delegation_authority),
+        tasks_completed=row.tasks_completed,
+        avg_task_completion_hours=_as_float(row.avg_task_completion_hours),
+        sla_compliance_percent=_as_float(row.sla_compliance_percent),
+        performance_score=_as_float(row.performance_score),
+    )
+
+
 def persist_employee(store: MemoryStore, record: EmployeeRecord) -> None:
     user_id = (
         UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
@@ -667,6 +701,33 @@ def persist_employee(store: MemoryStore, record: EmployeeRecord) -> None:
                 role_code=record.role_code,
                 approval_authority_limit=record.approval_authority_limit,
                 approval_authority_currency=record.approval_authority_currency,
+                phone=record.phone,
+                employment_type=record.employment_type,
+                join_date=record.join_date,
+                manager_employee_id=record.manager_employee_id,
+                team=record.team,
+                business_unit=record.business_unit,
+                location=record.location,
+                reporting_level=record.reporting_level,
+                primary_skills=list(record.primary_skills),
+                secondary_skills=list(record.secondary_skills),
+                certifications=list(record.certifications),
+                years_of_experience=record.years_of_experience,
+                skill_level=record.skill_level,
+                availability_percent=record.availability_percent,
+                weekly_capacity_hours=record.weekly_capacity_hours,
+                current_workload_percent=record.current_workload_percent,
+                cost_per_hour=record.cost_per_hour,
+                monthly_cost=record.monthly_cost,
+                max_allocation_percent=record.max_allocation_percent,
+                approval_tier=record.approval_tier,
+                can_approve_procurement=record.can_approve_procurement,
+                can_approve_budget=record.can_approve_budget,
+                delegation_authority=record.delegation_authority,
+                tasks_completed=record.tasks_completed,
+                avg_task_completion_hours=record.avg_task_completion_hours,
+                sla_compliance_percent=record.sla_compliance_percent,
+                performance_score=record.performance_score,
                 metadata_json={},
                 row_version=1,
                 created_at=record.created_at,
@@ -692,6 +753,55 @@ def persist_manager_link(store: MemoryStore, record: EmployeeManagerLinkRecord) 
         )
 
 
+def _supplier_from_row(row: SupplierModel) -> SupplierRecord:
+    return SupplierRecord(
+        id=row.id,
+        organization_id=row.organization_id,
+        name=row.name,
+        code=row.code,
+        status=row.status,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+        approval_status=row.approval_status,
+        website=row.website,
+        country_code=row.country_code,
+        supplier_number=row.supplier_number,
+        city=row.city,
+        address=row.address,
+        business_registration_number=row.business_registration_number,
+        tax_number=row.tax_number,
+        primary_contact_name=row.primary_contact_name,
+        primary_contact_email=row.primary_contact_email,
+        primary_contact_phone=row.primary_contact_phone,
+        secondary_contact_name=row.secondary_contact_name,
+        secondary_contact_email=row.secondary_contact_email,
+        secondary_contact_phone=row.secondary_contact_phone,
+        supplier_category=row.supplier_category or "other",
+        products_services=row.products_services,
+        lead_time_days=row.lead_time_days,
+        minimum_order_quantity=_as_float(row.minimum_order_quantity),
+        payment_terms=row.payment_terms,
+        preferred_currency=row.preferred_currency or "USD",
+        risk_level=row.risk_level or "low",
+        compliance_status=row.compliance_status or "pending",
+        insurance_valid=bool(row.insurance_valid),
+        contract_start_date=row.contract_start_date,
+        contract_expiry_date=row.contract_expiry_date,
+        certification_details=row.certification_details,
+        supplier_rating=_as_float(row.supplier_rating),
+        on_time_delivery_percent=_as_float(row.on_time_delivery_percent),
+        quality_score_percent=_as_float(row.quality_score_percent),
+        average_response_hours=_as_float(row.average_response_hours),
+        rejected_orders_count=int(row.rejected_orders_count or 0),
+        total_orders_completed=int(row.total_orders_completed or 0),
+        approval_tier=row.approval_tier or "none",
+        preferred_supplier=bool(row.preferred_supplier),
+        blacklisted=bool(row.blacklisted),
+        suspension_reason=row.suspension_reason,
+        notes=row.notes,
+    )
+
+
 def persist_supplier(store: MemoryStore, record: SupplierRecord) -> None:
     with sync_session_scope() as session:
         session.merge(
@@ -704,6 +814,40 @@ def persist_supplier(store: MemoryStore, record: SupplierRecord) -> None:
                 website=record.website,
                 country_code=record.country_code,
                 approval_status=record.approval_status,
+                supplier_number=record.supplier_number,
+                city=record.city,
+                address=record.address,
+                business_registration_number=record.business_registration_number,
+                tax_number=record.tax_number,
+                primary_contact_name=record.primary_contact_name,
+                primary_contact_email=record.primary_contact_email,
+                primary_contact_phone=record.primary_contact_phone,
+                secondary_contact_name=record.secondary_contact_name,
+                secondary_contact_email=record.secondary_contact_email,
+                secondary_contact_phone=record.secondary_contact_phone,
+                supplier_category=record.supplier_category,
+                products_services=record.products_services,
+                lead_time_days=record.lead_time_days,
+                minimum_order_quantity=record.minimum_order_quantity,
+                payment_terms=record.payment_terms,
+                preferred_currency=record.preferred_currency,
+                risk_level=record.risk_level,
+                compliance_status=record.compliance_status,
+                insurance_valid=record.insurance_valid,
+                contract_start_date=record.contract_start_date,
+                contract_expiry_date=record.contract_expiry_date,
+                certification_details=record.certification_details,
+                supplier_rating=record.supplier_rating,
+                on_time_delivery_percent=record.on_time_delivery_percent,
+                quality_score_percent=record.quality_score_percent,
+                average_response_hours=record.average_response_hours,
+                rejected_orders_count=record.rejected_orders_count,
+                total_orders_completed=record.total_orders_completed,
+                approval_tier=record.approval_tier,
+                preferred_supplier=record.preferred_supplier,
+                blacklisted=record.blacklisted,
+                suspension_reason=record.suspension_reason,
+                notes=record.notes,
                 metadata_json={},
                 row_version=1,
                 created_at=record.created_at,

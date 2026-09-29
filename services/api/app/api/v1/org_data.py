@@ -65,7 +65,14 @@ def _employee_page(
     page = apply_list(
         items,
         params,
-        search_fields=[lambda e: e.full_name, lambda e: e.email, lambda e: e.role_code or ""],
+        search_fields=[
+            lambda e: e.full_name,
+            lambda e: e.email,
+            lambda e: e.role_code or "",
+            lambda e: e.employee_code or "",
+            lambda e: e.title or "",
+            lambda e: e.team or "",
+        ],
         status_getter=lambda e: e.status,
         sort_fields={"name": lambda e: e.full_name, "created_at": lambda e: e.created_at},
     )
@@ -105,18 +112,11 @@ async def create_employee(
         current_usage=active,
         increment=1,
     )
+    payload = body.model_dump(exclude={"organization_id"})
     record = EmployeeService(org.organization_id).create(
         actor_user_id=user.id,
         correlation_id=get_correlation_id(request),
-        full_name=body.full_name,
-        email=body.email,
-        title=body.title,
-        department_id=body.department_id,
-        is_manager=body.is_manager,
-        employee_code=body.employee_code,
-        role_code=body.role_code,
-        approval_authority_limit=body.approval_authority_limit,
-        approval_authority_currency=body.approval_authority_currency,
+        **payload,
     )
     return EmployeeResponse.model_validate(record, from_attributes=True)
 
@@ -348,7 +348,13 @@ async def list_suppliers(
     page = apply_list(
         items,
         params,
-        search_fields=[lambda s: s.name, lambda s: s.code or ""],
+        search_fields=[
+            lambda s: s.name,
+            lambda s: s.code or "",
+            lambda s: s.supplier_number or "",
+            lambda s: s.city or "",
+            lambda s: s.supplier_category or "",
+        ],
         status_getter=lambda s: s.status,
         sort_fields={"name": lambda s: s.name},
     )
@@ -380,14 +386,11 @@ async def create_supplier(
         current_usage=active,
         increment=1,
     )
+    payload = body.model_dump(exclude={"organization_id"})
     record = SupplierService(org.organization_id).create(
         actor_user_id=user.id,
         correlation_id=get_correlation_id(request),
-        name=body.name,
-        code=body.code,
-        website=body.website,
-        country_code=body.country_code,
-        approval_status=body.approval_status,
+        **payload,
     )
     return SupplierResponse.model_validate(record, from_attributes=True)
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from threading import RLock
 from typing import Any
 from uuid import UUID, uuid4
@@ -66,6 +66,61 @@ class EmployeeRecord:
     role_code: str | None = None
     approval_authority_limit: float | None = None
     approval_authority_currency: str = "USD"
+    phone: str | None = None
+    employment_type: str = "full_time"
+    join_date: date | None = None
+    manager_employee_id: UUID | None = None
+    team: str | None = None
+    business_unit: str | None = None
+    location: str | None = None
+    reporting_level: int = 1
+    primary_skills: list[str] = field(default_factory=list)
+    secondary_skills: list[str] = field(default_factory=list)
+    certifications: list[str] = field(default_factory=list)
+    years_of_experience: float | None = None
+    skill_level: str = "intermediate"
+    availability_percent: float = 100
+    weekly_capacity_hours: float = 40
+    current_workload_percent: float = 0
+    cost_per_hour: float | None = None
+    monthly_cost: float | None = None
+    max_allocation_percent: float = 100
+    approval_tier: str = "none"
+    can_approve_procurement: bool = False
+    can_approve_budget: bool = False
+    delegation_authority: bool = False
+    tasks_completed: int | None = None
+    avg_task_completion_hours: float | None = None
+    sla_compliance_percent: float | None = None
+    performance_score: float | None = None
+
+    def workforce_snapshot(self) -> dict[str, Any]:
+        """Fields an allocation or risk agent can use without another directory lookup."""
+        return {
+            "employee_code": self.employee_code,
+            "employment_type": self.employment_type,
+            "team": self.team,
+            "business_unit": self.business_unit,
+            "location": self.location,
+            "reporting_level": self.reporting_level,
+            "primary_skills": list(self.primary_skills),
+            "secondary_skills": list(self.secondary_skills),
+            "certifications": list(self.certifications),
+            "years_of_experience": self.years_of_experience,
+            "skill_level": self.skill_level,
+            "availability_percent": self.availability_percent,
+            "weekly_capacity_hours": self.weekly_capacity_hours,
+            "current_workload_percent": self.current_workload_percent,
+            "cost_per_hour": self.cost_per_hour,
+            "monthly_cost": self.monthly_cost,
+            "max_allocation_percent": self.max_allocation_percent,
+            "approval_tier": self.approval_tier,
+            "can_approve_procurement": self.can_approve_procurement,
+            "can_approve_budget": self.can_approve_budget,
+            "delegation_authority": self.delegation_authority,
+            "performance_score": self.performance_score,
+            "sla_compliance_percent": self.sla_compliance_percent,
+        }
 
 
 @dataclass
@@ -117,6 +172,68 @@ class SupplierRecord:
     approval_status: str = "pending"
     website: str | None = None
     country_code: str | None = None
+    supplier_number: str | None = None
+    city: str | None = None
+    address: str | None = None
+    business_registration_number: str | None = None
+    tax_number: str | None = None
+    primary_contact_name: str | None = None
+    primary_contact_email: str | None = None
+    primary_contact_phone: str | None = None
+    secondary_contact_name: str | None = None
+    secondary_contact_email: str | None = None
+    secondary_contact_phone: str | None = None
+    supplier_category: str = "other"
+    products_services: str | None = None
+    lead_time_days: int | None = None
+    minimum_order_quantity: float | None = None
+    payment_terms: str | None = None
+    preferred_currency: str = "USD"
+    risk_level: str = "low"
+    compliance_status: str = "pending"
+    insurance_valid: bool = False
+    contract_start_date: date | None = None
+    contract_expiry_date: date | None = None
+    certification_details: str | None = None
+    supplier_rating: float | None = None
+    on_time_delivery_percent: float | None = None
+    quality_score_percent: float | None = None
+    average_response_hours: float | None = None
+    rejected_orders_count: int = 0
+    total_orders_completed: int = 0
+    approval_tier: str = "none"
+    preferred_supplier: bool = False
+    blacklisted: bool = False
+    suspension_reason: str | None = None
+    notes: str | None = None
+
+    def procurement_snapshot(self) -> dict[str, Any]:
+        """Fields a procurement or risk agent can use without another directory lookup."""
+        return {
+            "supplier_number": self.supplier_number,
+            "code": self.code,
+            "supplier_category": self.supplier_category,
+            "products_services": self.products_services,
+            "lead_time_days": self.lead_time_days,
+            "minimum_order_quantity": self.minimum_order_quantity,
+            "payment_terms": self.payment_terms,
+            "preferred_currency": self.preferred_currency,
+            "risk_level": self.risk_level,
+            "compliance_status": self.compliance_status,
+            "insurance_valid": self.insurance_valid,
+            "supplier_rating": self.supplier_rating,
+            "on_time_delivery_percent": self.on_time_delivery_percent,
+            "quality_score_percent": self.quality_score_percent,
+            "average_response_hours": self.average_response_hours,
+            "rejected_orders_count": self.rejected_orders_count,
+            "total_orders_completed": self.total_orders_completed,
+            "approval_status": self.approval_status,
+            "approval_tier": self.approval_tier,
+            "preferred_supplier": self.preferred_supplier,
+            "blacklisted": self.blacklisted,
+            "country_code": self.country_code,
+            "city": self.city,
+        }
 
 
 @dataclass

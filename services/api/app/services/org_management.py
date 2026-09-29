@@ -24,6 +24,8 @@ from app.database.memory import (
     get_memory_store,
     new_id,
 )
+from app.domain.employee_profile import validate_employee_profile
+from app.domain.supplier_profile import validate_supplier_profile
 from app.repositories.memory_repos import (
     BudgetRepository,
     CostCenterRepository,
@@ -121,6 +123,19 @@ class EmployeeService:
             )
         return employee
 
+    def _assert_directory_refs(
+        self, fields: dict[str, Any], *, employee_id: UUID | None = None
+    ) -> None:
+        validate_employee_profile(fields, employee_id=employee_id)
+        department_id = fields.get("department_id")
+        if department_id is not None:
+            DepartmentRepository(self.organization_id).get(department_id)
+        manager_id = fields.get("manager_employee_id")
+        if manager_id is not None:
+            manager = self.repo.get(manager_id)
+            if manager.status != ACTIVE:
+                raise ValidationAppError("Manager must be an active employee")
+
     def create(
         self,
         *,
@@ -128,29 +143,21 @@ class EmployeeService:
         correlation_id: str | None,
         full_name: str,
         email: str,
-        title: str | None = None,
-        department_id: UUID | None = None,
-        is_manager: bool = False,
-        employee_code: str | None = None,
-        role_code: str | None = None,
-        approval_authority_limit: float | None = None,
-        approval_authority_currency: str = "USD",
+        **fields: Any,
     ) -> EmployeeRecord:
         email_norm = _norm_email(email)
         if not email_norm:
             raise ValidationAppError("email is required")
+        cleaned_name = full_name.strip()
+        if not cleaned_name:
+            raise ValidationAppError("full_name is required")
+        self._assert_directory_refs(fields)
         self.repo.assert_no_active_email_duplicate(email_norm)
+        fields.setdefault("status", ACTIVE)
         record = self.repo.create(
-            full_name=full_name.strip(),
+            full_name=cleaned_name,
             email=email_norm,
-            title=title,
-            department_id=department_id,
-            is_manager=is_manager,
-            employee_code=employee_code,
-            role_code=role_code,
-            approval_authority_limit=approval_authority_limit,
-            approval_authority_currency=approval_authority_currency,
-            status=ACTIVE,
+            **fields,
         )
         self.audit.record(
             organization_id=self.organization_id,
@@ -176,6 +183,16 @@ class EmployeeService:
             fields["email"] = email_norm
             if email_norm:
                 self.repo.assert_no_active_email_duplicate(email_norm, exclude_id=employee_id)
+        if "full_name" in fields and fields["full_name"] is not None:
+            fields["full_name"] = str(fields["full_name"]).strip()
+        self._assert_directory_refs(fields, employee_id=employee_id)
+        current = self.repo.get(employee_id)
+        workload = fields.get("current_workload_percent", current.current_workload_percent)
+        maximum = fields.get("max_allocation_percent", current.max_allocation_percent)
+        if workload is not None and maximum is not None and float(workload) > float(maximum):
+            raise ValidationAppError(
+                "current_workload_percent cannot exceed max_allocation_percent"
+            )
         record = self.repo.update(employee_id, **fields)
         self.audit.record(
             organization_id=self.organization_id,
@@ -300,7 +317,27 @@ class SupplierService:
                 "Inactive suppliers cannot be used as approved suppliers",
                 details={"supplier_id": str(supplier_id), "status": supplier.status},
             )
+        if supplier.blacklisted:
+            raise ValidationAppError(
+                "Blacklisted suppliers cannot be used for procurement",
+                details={"supplier_id": str(supplier_id)},
+            )
         return supplier
+
+    def _assert_contract_window(
+        self, fields: dict[str, Any], current: SupplierRecord | None = None
+    ) -> None:
+        start = fields.get("contract_start_date")
+        expiry = fields.get("contract_expiry_date")
+        if current is not None:
+            if "contract_start_date" not in fields:
+                start = current.contract_start_date
+            if "contract_expiry_date" not in fields:
+                expiry = current.contract_expiry_date
+        if start is not None and expiry is not None and expiry < start:
+            raise ValidationAppError(
+                "Contract expiry date cannot be before the contract start date"
+            )
 
     def create(
         self,
@@ -308,19 +345,16 @@ class SupplierService:
         actor_user_id: UUID,
         correlation_id: str | None,
         name: str,
-        code: str | None = None,
-        website: str | None = None,
-        country_code: str | None = None,
-        approval_status: str = "pending",
+        **fields: Any,
     ) -> SupplierRecord:
-        record = self.repo.create(
-            name=name.strip(),
-            code=code,
-            website=website,
-            country_code=country_code,
-            approval_status=approval_status,
-            status=ACTIVE,
-        )
+        cleaned = name.strip()
+        if not cleaned:
+            raise ValidationAppError("Company name is required")
+        fields.setdefault("approval_status", "pending")
+        fields.setdefault("status", ACTIVE)
+        validate_supplier_profile(fields)
+        self._assert_contract_window(fields)
+        record = self.repo.create(name=cleaned, **fields)
         self.audit.record(
             organization_id=self.organization_id,
             actor_user_id=actor_user_id,
@@ -340,6 +374,10 @@ class SupplierService:
         correlation_id: str | None,
         **fields: Any,
     ) -> SupplierRecord:
+        if "name" in fields and fields["name"] is not None:
+            fields["name"] = str(fields["name"]).strip()
+        validate_supplier_profile(fields)
+        self._assert_contract_window(fields, self.repo.get(supplier_id))
         record = self.repo.update(supplier_id, **fields)
         self.audit.record(
             organization_id=self.organization_id,

@@ -253,6 +253,12 @@ export const apiClient = {
       body: JSON.stringify(body),
     });
   },
+  updateEmployee(id: string, body: Record<string, unknown>): Promise<Employee> {
+    return request(`/employees/${id}`, (data) => EmployeeSchema.parse(data), {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    });
+  },
   deactivateEmployee(id: string): Promise<Employee> {
     return request(`/employees/${id}/deactivate`, (data) => EmployeeSchema.parse(data), {
       method: "POST",

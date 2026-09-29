@@ -33,6 +33,7 @@ from app.database.memory import (
     get_memory_store,
     new_id,
 )
+from app.domain.employee_profile import CLEARABLE_FIELDS, MUTABLE_FIELDS
 from app.domain.enums import (
     ApprovalStatus,
     DocumentStatus,
@@ -40,6 +41,8 @@ from app.domain.enums import (
     OrgRole,
     ProcessRunStatus,
 )
+from app.domain.supplier_profile import CLEARABLE_FIELDS as SUPPLIER_CLEARABLE
+from app.domain.supplier_profile import MUTABLE_FIELDS as SUPPLIER_MUTABLE
 from app.repositories.base import TenantScopedRepository
 from app.security.errors import ConflictError, NotFoundError, ValidationAppError
 
@@ -208,8 +211,42 @@ class EmployeeRepository(TenantRepository):
                     details={"email": email},
                 )
 
+    def _next_employee_code(self) -> str:
+        used = {employee.employee_code for employee in self.list_all() if employee.employee_code}
+        number = 1
+        while True:
+            code = f"EMP-{number:04d}"
+            if code not in used:
+                return code
+            number += 1
+
     def create(self, **kwargs: Any) -> EmployeeRecord:
         now = utcnow()
+        employee_code = kwargs.get("employee_code") or self._next_employee_code()
+        if any(
+            employee.employee_code == employee_code
+            and employee.organization_id == self.organization_id
+            for employee in self.list_all()
+        ):
+            raise ConflictError(
+                "Employee ID already exists in this organization",
+                code="DUPLICATE_EMPLOYEE_CODE",
+                details={"employee_code": employee_code},
+            )
+        reserved = {
+            "full_name",
+            "email",
+            "status",
+            "employee_code",
+            "title",
+            "department_id",
+            "is_manager",
+        }
+        profile = {
+            key: value
+            for key, value in kwargs.items()
+            if key in MUTABLE_FIELDS and key not in reserved and value is not None
+        }
         record = EmployeeRecord(
             id=new_id(),
             organization_id=self.organization_id,
@@ -221,10 +258,8 @@ class EmployeeRepository(TenantRepository):
             email=kwargs["email"],
             title=kwargs.get("title"),
             department_id=kwargs.get("department_id"),
-            employee_code=kwargs.get("employee_code"),
-            role_code=kwargs.get("role_code"),
-            approval_authority_limit=kwargs.get("approval_authority_limit"),
-            approval_authority_currency=kwargs.get("approval_authority_currency", "USD"),
+            employee_code=employee_code,
+            **profile,
         )
         self.store.employees[record.id] = record
         return record
@@ -239,21 +274,12 @@ class EmployeeRepository(TenantRepository):
 
     def update(self, employee_id: UUID, **fields: Any) -> EmployeeRecord:
         record = self.get(employee_id)
-        allowed = {
-            "full_name",
-            "email",
-            "title",
-            "department_id",
-            "is_manager",
-            "status",
-            "employee_code",
-            "role_code",
-            "approval_authority_limit",
-            "approval_authority_currency",
-        }
         for key, value in fields.items():
-            if key in allowed and value is not None:
-                setattr(record, key, value)
+            if key not in MUTABLE_FIELDS:
+                continue
+            if value is None and key not in CLEARABLE_FIELDS:
+                continue
+            setattr(record, key, value)
         record.updated_at = utcnow()
         return record
 
@@ -412,28 +438,55 @@ class SupplierRepository(TenantRepository):
             if s.organization_id == self.organization_id
         ]
 
-    def create(
-        self,
-        *,
-        name: str,
-        code: str | None = None,
-        website: str | None = None,
-        country_code: str | None = None,
-        approval_status: str = "pending",
-        status: str = "active",
-    ) -> SupplierRecord:
+    def _next_supplier_number(self) -> str:
+        used = {
+            supplier.supplier_number
+            for supplier in self.list_all()
+            if supplier.supplier_number
+        }
+        number = 1
+        while True:
+            code = f"SUP-{number:04d}"
+            if code not in used:
+                return code
+            number += 1
+
+    def create(self, *, name: str, **kwargs: Any) -> SupplierRecord:
         now = utcnow()
+        supplier_number = kwargs.get("supplier_number") or self._next_supplier_number()
+        if any(supplier.supplier_number == supplier_number for supplier in self.list_all()):
+            raise ConflictError(
+                "Supplier ID already exists in this organization",
+                code="DUPLICATE_SUPPLIER_NUMBER",
+                details={"supplier_number": supplier_number},
+            )
+        reserved = {
+            "name",
+            "code",
+            "status",
+            "approval_status",
+            "website",
+            "country_code",
+            "supplier_number",
+        }
+        profile = {
+            key: value
+            for key, value in kwargs.items()
+            if key in SUPPLIER_MUTABLE and key not in reserved and value is not None
+        }
         record = SupplierRecord(
             id=new_id(),
             organization_id=self.organization_id,
             name=name,
-            code=code,
-            status=status,
-            approval_status=approval_status,
-            website=website,
-            country_code=country_code,
+            code=kwargs.get("code"),
+            status=kwargs.get("status", "active"),
             created_at=now,
             updated_at=now,
+            approval_status=kwargs.get("approval_status", "pending"),
+            website=kwargs.get("website"),
+            country_code=kwargs.get("country_code"),
+            supplier_number=supplier_number,
+            **profile,
         )
         self.store.suppliers[record.id] = record
         return record
@@ -449,15 +502,11 @@ class SupplierRepository(TenantRepository):
     def update(self, supplier_id: UUID, **fields: Any) -> SupplierRecord:
         record = self.get(supplier_id)
         for key, value in fields.items():
-            if key in {
-                "name",
-                "code",
-                "status",
-                "approval_status",
-                "website",
-                "country_code",
-            } and value is not None:
-                setattr(record, key, value)
+            if key not in SUPPLIER_MUTABLE:
+                continue
+            if value is None and key not in SUPPLIER_CLEARABLE:
+                continue
+            setattr(record, key, value)
         record.updated_at = utcnow()
         return record
 

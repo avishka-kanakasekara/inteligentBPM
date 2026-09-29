@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Any
+from datetime import date, datetime
+from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from app.contracts.common import APIModel
 
@@ -75,30 +75,183 @@ class OrganizationResponse(APIModel):
     tax_information: dict[str, Any] = Field(default_factory=dict)
 
 
+def _blank_to_none(value: object) -> object:
+    if isinstance(value, str) and not value.strip():
+        return None
+    return value
+
+
+def _skill_list(value: object) -> object:
+    if value is None or value == "":
+        return value if value is None else []
+    if isinstance(value, str):
+        return [part.strip() for part in value.split(",") if part.strip()]
+    if isinstance(value, list):
+        return [str(part).strip() for part in value if str(part).strip()]
+    return value
+
+
 class EmployeeCreate(APIModel):
-    full_name: str
-    email: str
-    title: str | None = None
+    full_name: str = Field(min_length=1, max_length=200)
+    email: str = Field(min_length=3, max_length=320)
+    status: Literal["active", "inactive"] = "active"
+    title: str | None = Field(default=None, max_length=160)
     department_id: UUID | None = None
     is_manager: bool = False
-    employee_code: str | None = None
-    role_code: str | None = None
-    approval_authority_limit: float | None = None
-    approval_authority_currency: str = "USD"
+    employee_code: str | None = Field(default=None, max_length=40)
+    role_code: str | None = Field(default=None, max_length=80)
+    approval_authority_limit: float | None = Field(default=None, ge=0)
+    approval_authority_currency: str = Field(default="USD", min_length=3, max_length=3)
+    phone: str | None = Field(default=None, max_length=40)
+    employment_type: Literal["full_time", "part_time", "contract"] = "full_time"
+    join_date: date | None = None
+    manager_employee_id: UUID | None = None
+    team: str | None = Field(default=None, max_length=120)
+    business_unit: str | None = Field(default=None, max_length=120)
+    location: str | None = Field(default=None, max_length=120)
+    reporting_level: int = Field(default=1, ge=1, le=20)
+    primary_skills: list[str] = Field(default_factory=list, max_length=30)
+    secondary_skills: list[str] = Field(default_factory=list, max_length=30)
+    certifications: list[str] = Field(default_factory=list, max_length=30)
+    years_of_experience: float | None = Field(default=None, ge=0, le=80)
+    skill_level: Literal["beginner", "intermediate", "expert"] = "intermediate"
+    availability_percent: float = Field(default=100, ge=0, le=100)
+    weekly_capacity_hours: float = Field(default=40, ge=0, le=168)
+    current_workload_percent: float = Field(default=0, ge=0, le=100)
+    cost_per_hour: float | None = Field(default=None, ge=0)
+    monthly_cost: float | None = Field(default=None, ge=0)
+    max_allocation_percent: float = Field(default=100, ge=0, le=100)
+    approval_tier: Literal["none", "team", "department", "business_unit", "executive"] = "none"
+    can_approve_procurement: bool = False
+    can_approve_budget: bool = False
+    delegation_authority: bool = False
+    tasks_completed: int | None = Field(default=None, ge=0)
+    avg_task_completion_hours: float | None = Field(default=None, ge=0)
+    sla_compliance_percent: float | None = Field(default=None, ge=0, le=100)
+    performance_score: float | None = Field(default=None, ge=0, le=100)
     organization_id: UUID | None = None
+
+    @field_validator(
+        "title",
+        "phone",
+        "team",
+        "business_unit",
+        "location",
+        "role_code",
+        "employee_code",
+        "department_id",
+        "manager_employee_id",
+        mode="before",
+    )
+    @classmethod
+    def _empty_optional(cls, value: object) -> object:
+        return _blank_to_none(value)
+
+    @field_validator("email")
+    @classmethod
+    def _normalize_email(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if "@" not in normalized or normalized.startswith("@") or normalized.endswith("@"):
+            raise ValueError("Enter a valid email address")
+        return normalized
+
+    @field_validator("full_name")
+    @classmethod
+    def _name(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Full name is required")
+        return cleaned
+
+    @field_validator("primary_skills", "secondary_skills", "certifications", mode="before")
+    @classmethod
+    def _lists(cls, value: object) -> object:
+        parsed = _skill_list(value)
+        return [] if parsed is None else parsed
 
 
 class EmployeeUpdate(APIModel):
-    full_name: str | None = None
-    email: str | None = None
-    title: str | None = None
+    full_name: str | None = Field(default=None, min_length=1, max_length=200)
+    email: str | None = Field(default=None, min_length=3, max_length=320)
+    title: str | None = Field(default=None, max_length=160)
     department_id: UUID | None = None
     is_manager: bool | None = None
-    employee_code: str | None = None
-    role_code: str | None = None
-    approval_authority_limit: float | None = None
-    approval_authority_currency: str | None = None
+    employee_code: str | None = Field(default=None, max_length=40)
+    role_code: str | None = Field(default=None, max_length=80)
+    approval_authority_limit: float | None = Field(default=None, ge=0)
+    approval_authority_currency: str | None = Field(default=None, min_length=3, max_length=3)
+    phone: str | None = Field(default=None, max_length=40)
+    employment_type: Literal["full_time", "part_time", "contract"] | None = None
+    join_date: date | None = None
+    manager_employee_id: UUID | None = None
+    team: str | None = Field(default=None, max_length=120)
+    business_unit: str | None = Field(default=None, max_length=120)
+    location: str | None = Field(default=None, max_length=120)
+    reporting_level: int | None = Field(default=None, ge=1, le=20)
+    primary_skills: list[str] | None = Field(default=None, max_length=30)
+    secondary_skills: list[str] | None = Field(default=None, max_length=30)
+    certifications: list[str] | None = Field(default=None, max_length=30)
+    years_of_experience: float | None = Field(default=None, ge=0, le=80)
+    skill_level: Literal["beginner", "intermediate", "expert"] | None = None
+    availability_percent: float | None = Field(default=None, ge=0, le=100)
+    weekly_capacity_hours: float | None = Field(default=None, ge=0, le=168)
+    current_workload_percent: float | None = Field(default=None, ge=0, le=100)
+    cost_per_hour: float | None = Field(default=None, ge=0)
+    monthly_cost: float | None = Field(default=None, ge=0)
+    max_allocation_percent: float | None = Field(default=None, ge=0, le=100)
+    approval_tier: Literal["none", "team", "department", "business_unit", "executive"] | None = None
+    can_approve_procurement: bool | None = None
+    can_approve_budget: bool | None = None
+    delegation_authority: bool | None = None
+    status: Literal["active", "inactive"] | None = None
+    tasks_completed: int | None = Field(default=None, ge=0)
+    avg_task_completion_hours: float | None = Field(default=None, ge=0)
+    sla_compliance_percent: float | None = Field(default=None, ge=0, le=100)
+    performance_score: float | None = Field(default=None, ge=0, le=100)
     organization_id: UUID | None = None
+
+    @field_validator(
+        "title",
+        "phone",
+        "team",
+        "business_unit",
+        "location",
+        "role_code",
+        "employee_code",
+        "department_id",
+        "manager_employee_id",
+        mode="before",
+    )
+    @classmethod
+    def _empty_optional(cls, value: object) -> object:
+        return _blank_to_none(value)
+
+    @field_validator("email")
+    @classmethod
+    def _normalize_email(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip().lower()
+        if "@" not in normalized or normalized.startswith("@") or normalized.endswith("@"):
+            raise ValueError("Enter a valid email address")
+        return normalized
+
+    @field_validator("full_name")
+    @classmethod
+    def _name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Full name is required")
+        return cleaned
+
+    @field_validator("primary_skills", "secondary_skills", "certifications", mode="before")
+    @classmethod
+    def _lists(cls, value: object) -> object:
+        if value is None:
+            return None
+        return _skill_list(value)
 
 
 class EmployeeResponse(APIModel):
@@ -106,14 +259,41 @@ class EmployeeResponse(APIModel):
     organization_id: UUID
     full_name: str
     email: str
-    title: str | None
-    department_id: UUID | None
+    title: str | None = None
+    department_id: UUID | None = None
     is_manager: bool
     status: str
     employee_code: str | None = None
     role_code: str | None = None
     approval_authority_limit: float | None = None
     approval_authority_currency: str = "USD"
+    phone: str | None = None
+    employment_type: str = "full_time"
+    join_date: date | None = None
+    manager_employee_id: UUID | None = None
+    team: str | None = None
+    business_unit: str | None = None
+    location: str | None = None
+    reporting_level: int = 1
+    primary_skills: list[str] = Field(default_factory=list)
+    secondary_skills: list[str] = Field(default_factory=list)
+    certifications: list[str] = Field(default_factory=list)
+    years_of_experience: float | None = None
+    skill_level: str = "intermediate"
+    availability_percent: float = 100
+    weekly_capacity_hours: float = 40
+    current_workload_percent: float = 0
+    cost_per_hour: float | None = None
+    monthly_cost: float | None = None
+    max_allocation_percent: float = 100
+    approval_tier: str = "none"
+    can_approve_procurement: bool = False
+    can_approve_budget: bool = False
+    delegation_authority: bool = False
+    tasks_completed: int | None = None
+    avg_task_completion_hours: float | None = None
+    sla_compliance_percent: float | None = None
+    performance_score: float | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -189,33 +369,236 @@ class CostCenterResponse(APIModel):
     updated_at: datetime
 
 
+def _optional_email(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip().lower()
+    if not normalized:
+        return None
+    if "@" not in normalized or normalized.startswith("@") or normalized.endswith("@"):
+        raise ValueError("Enter a valid email address")
+    return normalized
+
+
 class SupplierCreate(APIModel):
-    name: str
-    code: str | None = None
-    website: str | None = None
-    country_code: str | None = None
-    approval_status: str = "pending"
+    name: str = Field(min_length=1, max_length=200)
+    code: str | None = Field(default=None, max_length=40)
+    status: Literal["active", "inactive"] = "active"
+    website: str | None = Field(default=None, max_length=300)
+    country_code: str | None = Field(default=None, max_length=80)
+    city: str | None = Field(default=None, max_length=120)
+    address: str | None = Field(default=None, max_length=300)
+    business_registration_number: str | None = Field(default=None, max_length=80)
+    tax_number: str | None = Field(default=None, max_length=80)
+    primary_contact_name: str | None = Field(default=None, max_length=160)
+    primary_contact_email: str | None = None
+    primary_contact_phone: str | None = Field(default=None, max_length=40)
+    secondary_contact_name: str | None = Field(default=None, max_length=160)
+    secondary_contact_email: str | None = None
+    secondary_contact_phone: str | None = Field(default=None, max_length=40)
+    supplier_category: Literal[
+        "raw_materials",
+        "manufacturing",
+        "logistics",
+        "it_services",
+        "consulting",
+        "finance",
+        "other",
+    ] = "other"
+    products_services: str | None = Field(default=None, max_length=1000)
+    lead_time_days: int | None = Field(default=None, ge=0)
+    minimum_order_quantity: float | None = Field(default=None, ge=0)
+    payment_terms: str | None = Field(default=None, max_length=160)
+    preferred_currency: str = Field(default="USD", min_length=3, max_length=3)
+    risk_level: Literal["low", "medium", "high"] = "low"
+    compliance_status: Literal["pending", "compliant", "non_compliant", "expired"] = "pending"
+    insurance_valid: bool = False
+    contract_start_date: date | None = None
+    contract_expiry_date: date | None = None
+    certification_details: str | None = Field(default=None, max_length=1000)
+    supplier_rating: float | None = Field(default=None, ge=1, le=5)
+    on_time_delivery_percent: float | None = Field(default=None, ge=0, le=100)
+    quality_score_percent: float | None = Field(default=None, ge=0, le=100)
+    average_response_hours: float | None = Field(default=None, ge=0)
+    rejected_orders_count: int = Field(default=0, ge=0)
+    total_orders_completed: int = Field(default=0, ge=0)
+    approval_status: Literal["pending", "approved", "rejected", "suspended"] = "pending"
+    approval_tier: Literal["none", "team", "department", "business_unit", "executive"] = "none"
+    preferred_supplier: bool = False
+    blacklisted: bool = False
+    suspension_reason: str | None = Field(default=None, max_length=500)
+    notes: str | None = Field(default=None, max_length=2000)
     organization_id: UUID | None = None
+
+    @field_validator(
+        "code",
+        "website",
+        "country_code",
+        "city",
+        "address",
+        "business_registration_number",
+        "tax_number",
+        "primary_contact_name",
+        "primary_contact_phone",
+        "secondary_contact_name",
+        "secondary_contact_phone",
+        "products_services",
+        "payment_terms",
+        "certification_details",
+        "suspension_reason",
+        "notes",
+        mode="before",
+    )
+    @classmethod
+    def _empty_optional(cls, value: object) -> object:
+        return _blank_to_none(value)
+
+    @field_validator("name")
+    @classmethod
+    def _name(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Company name is required")
+        return cleaned
+
+    @field_validator("primary_contact_email", "secondary_contact_email")
+    @classmethod
+    def _contact_email(cls, value: str | None) -> str | None:
+        return _optional_email(value)
 
 
 class SupplierUpdate(APIModel):
-    name: str | None = None
-    code: str | None = None
-    website: str | None = None
-    country_code: str | None = None
-    approval_status: str | None = None
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    code: str | None = Field(default=None, max_length=40)
+    status: Literal["active", "inactive"] | None = None
+    website: str | None = Field(default=None, max_length=300)
+    country_code: str | None = Field(default=None, max_length=80)
+    city: str | None = Field(default=None, max_length=120)
+    address: str | None = Field(default=None, max_length=300)
+    business_registration_number: str | None = Field(default=None, max_length=80)
+    tax_number: str | None = Field(default=None, max_length=80)
+    primary_contact_name: str | None = Field(default=None, max_length=160)
+    primary_contact_email: str | None = None
+    primary_contact_phone: str | None = Field(default=None, max_length=40)
+    secondary_contact_name: str | None = Field(default=None, max_length=160)
+    secondary_contact_email: str | None = None
+    secondary_contact_phone: str | None = Field(default=None, max_length=40)
+    supplier_category: Literal[
+        "raw_materials",
+        "manufacturing",
+        "logistics",
+        "it_services",
+        "consulting",
+        "finance",
+        "other",
+    ] | None = None
+    products_services: str | None = Field(default=None, max_length=1000)
+    lead_time_days: int | None = Field(default=None, ge=0)
+    minimum_order_quantity: float | None = Field(default=None, ge=0)
+    payment_terms: str | None = Field(default=None, max_length=160)
+    preferred_currency: str | None = Field(default=None, min_length=3, max_length=3)
+    risk_level: Literal["low", "medium", "high"] | None = None
+    compliance_status: Literal["pending", "compliant", "non_compliant", "expired"] | None = None
+    insurance_valid: bool | None = None
+    contract_start_date: date | None = None
+    contract_expiry_date: date | None = None
+    certification_details: str | None = Field(default=None, max_length=1000)
+    supplier_rating: float | None = Field(default=None, ge=1, le=5)
+    on_time_delivery_percent: float | None = Field(default=None, ge=0, le=100)
+    quality_score_percent: float | None = Field(default=None, ge=0, le=100)
+    average_response_hours: float | None = Field(default=None, ge=0)
+    rejected_orders_count: int | None = Field(default=None, ge=0)
+    total_orders_completed: int | None = Field(default=None, ge=0)
+    approval_status: Literal["pending", "approved", "rejected", "suspended"] | None = None
+    approval_tier: Literal["none", "team", "department", "business_unit", "executive"] | None = None
+    preferred_supplier: bool | None = None
+    blacklisted: bool | None = None
+    suspension_reason: str | None = Field(default=None, max_length=500)
+    notes: str | None = Field(default=None, max_length=2000)
     organization_id: UUID | None = None
+
+    @field_validator(
+        "code",
+        "website",
+        "country_code",
+        "city",
+        "address",
+        "business_registration_number",
+        "tax_number",
+        "primary_contact_name",
+        "primary_contact_phone",
+        "secondary_contact_name",
+        "secondary_contact_phone",
+        "products_services",
+        "payment_terms",
+        "certification_details",
+        "suspension_reason",
+        "notes",
+        mode="before",
+    )
+    @classmethod
+    def _empty_optional(cls, value: object) -> object:
+        return _blank_to_none(value)
+
+    @field_validator("name")
+    @classmethod
+    def _name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Company name is required")
+        return cleaned
+
+    @field_validator("primary_contact_email", "secondary_contact_email")
+    @classmethod
+    def _contact_email(cls, value: str | None) -> str | None:
+        return _optional_email(value)
 
 
 class SupplierResponse(APIModel):
     id: UUID
     organization_id: UUID
     name: str
-    code: str | None
+    code: str | None = None
     status: str
     approval_status: str = "pending"
     website: str | None = None
     country_code: str | None = None
+    supplier_number: str | None = None
+    city: str | None = None
+    address: str | None = None
+    business_registration_number: str | None = None
+    tax_number: str | None = None
+    primary_contact_name: str | None = None
+    primary_contact_email: str | None = None
+    primary_contact_phone: str | None = None
+    secondary_contact_name: str | None = None
+    secondary_contact_email: str | None = None
+    secondary_contact_phone: str | None = None
+    supplier_category: str = "other"
+    products_services: str | None = None
+    lead_time_days: int | None = None
+    minimum_order_quantity: float | None = None
+    payment_terms: str | None = None
+    preferred_currency: str = "USD"
+    risk_level: str = "low"
+    compliance_status: str = "pending"
+    insurance_valid: bool = False
+    contract_start_date: date | None = None
+    contract_expiry_date: date | None = None
+    certification_details: str | None = None
+    supplier_rating: float | None = None
+    on_time_delivery_percent: float | None = None
+    quality_score_percent: float | None = None
+    average_response_hours: float | None = None
+    rejected_orders_count: int = 0
+    total_orders_completed: int = 0
+    approval_tier: str = "none"
+    preferred_supplier: bool = False
+    blacklisted: bool = False
+    suspension_reason: str | None = None
+    notes: str | None = None
     created_at: datetime
     updated_at: datetime
 
