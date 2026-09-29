@@ -622,6 +622,7 @@ class AllocationService:
                     "department_id": str(e.department_id) if e.department_id else None,
                     "approval_authority_limit": e.approval_authority_limit,
                     "status": e.status,
+                    **e.workforce_snapshot(),
                 }
                 for e in catalog.employees
                 if e.status == "active"
@@ -645,6 +646,7 @@ class AllocationService:
                     "code": s.code,
                     "approval_status": s.approval_status,
                     "status": s.status,
+                    **s.procurement_snapshot(),
                 }
                 for s in catalog.suppliers
                 if s.status == "active"

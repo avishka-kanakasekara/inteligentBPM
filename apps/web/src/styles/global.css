@@ -582,6 +582,26 @@ input[type="checkbox"] {
   grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
   gap: 0.85rem;
 }
+.form-sections {
+  display: grid;
+  gap: 0.85rem;
+}
+.form-section {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-muted, var(--color-bg));
+  padding: 1rem 1rem 1.1rem;
+}
+.form-section h3 {
+  margin: 0 0 0.2rem;
+  font-size: 1rem;
+}
+.section-hint {
+  margin: 0 0 0.85rem;
+  color: var(--color-text-tertiary);
+  font-size: 0.8125rem;
+}
+.span-2 { grid-column: 1 / -1; }
 .checkbox-row {
   display: flex !important;
   align-items: center;

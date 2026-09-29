@@ -360,3 +360,133 @@ def test_ambiguous_manager_not_guessed(
     )
     assert second.status_code == 409
     assert second.json()["error"]["code"] == "AMBIGUOUS_MANAGER"
+
+
+def test_supplier_procurement_profile_create_and_update(
+    client: TestClient, auth_headers_a: dict[str, str]
+) -> None:
+    created = client.post(
+        "/v1/suppliers",
+        headers=auth_headers_a,
+        json={
+            "name": "Harbor Logistics",
+            "code": "HL-1",
+            "country_code": "LK",
+            "supplier_category": "logistics",
+            "risk_level": "medium",
+            "lead_time_days": 12,
+            "supplier_rating": 4.5,
+            "on_time_delivery_percent": 96,
+            "approval_status": "pending",
+            "approval_tier": "department",
+            "contract_start_date": "2026-01-01",
+            "contract_expiry_date": "2027-01-01",
+        },
+    )
+    assert created.status_code == 201
+    body = created.json()
+    assert body["supplier_number"].startswith("SUP-")
+    assert body["supplier_category"] == "logistics"
+    assert body["risk_level"] == "medium"
+    assert body["supplier_rating"] == 4.5
+    assert body["code"] == "HL-1"
+
+    updated = client.patch(
+        f"/v1/suppliers/{body['id']}",
+        headers=auth_headers_a,
+        json={"city": "Colombo", "rejected_orders_count": 2, "preferred_supplier": True},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["city"] == "Colombo"
+    assert updated.json()["supplier_number"] == body["supplier_number"]
+
+    invalid_rating = client.post(
+        "/v1/suppliers",
+        headers=auth_headers_a,
+        json={"name": "Bad Rating", "supplier_rating": 9},
+    )
+    assert invalid_rating.status_code == 422
+
+    invalid_dates = client.post(
+        "/v1/suppliers",
+        headers=auth_headers_a,
+        json={
+            "name": "Bad Contract",
+            "contract_start_date": "2027-06-01",
+            "contract_expiry_date": "2026-01-01",
+        },
+    )
+    assert invalid_dates.status_code == 422
+
+    negative_rejects = client.post(
+        "/v1/suppliers",
+        headers=auth_headers_a,
+        json={"name": "Negative Orders", "rejected_orders_count": -1},
+    )
+    assert negative_rejects.status_code == 422
+
+
+def test_employee_workforce_profile_create_and_update(
+    client: TestClient, auth_headers_a: dict[str, str]
+) -> None:
+    created = client.post(
+        "/v1/employees",
+        headers=auth_headers_a,
+        json={
+            "full_name": "Avery Planner",
+            "email": "avery@example.com",
+            "title": "Process Analyst",
+            "employment_type": "contract",
+            "primary_skills": ["process design", "bpmn"],
+            "skill_level": "expert",
+            "availability_percent": 80,
+            "weekly_capacity_hours": 30,
+            "current_workload_percent": 20,
+            "max_allocation_percent": 70,
+            "approval_tier": "team",
+            "can_approve_procurement": True,
+            "cost_per_hour": 45,
+        },
+    )
+    assert created.status_code == 201
+    body = created.json()
+    assert body["employee_code"].startswith("EMP-")
+    assert body["employment_type"] == "contract"
+    assert body["primary_skills"] == ["process design", "bpmn"]
+    assert body["availability_percent"] == 80
+    assert body["approval_tier"] == "team"
+    assert body["can_approve_procurement"] is True
+    assert body["is_manager"] is False
+
+    updated = client.patch(
+        f"/v1/employees/{body['id']}",
+        headers=auth_headers_a,
+        json={"team": "Operations", "current_workload_percent": 40, "phone": "+1 202 555 0142"},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["team"] == "Operations"
+    assert updated.json()["current_workload_percent"] == 40
+    assert updated.json()["employee_code"] == body["employee_code"]
+
+    invalid = client.post(
+        "/v1/employees",
+        headers=auth_headers_a,
+        json={
+            "full_name": "Over Capacity",
+            "email": "over@example.com",
+            "availability_percent": 140,
+        },
+    )
+    assert invalid.status_code == 422
+
+    overloaded = client.post(
+        "/v1/employees",
+        headers=auth_headers_a,
+        json={
+            "full_name": "Overloaded",
+            "email": "load@example.com",
+            "current_workload_percent": 90,
+            "max_allocation_percent": 50,
+        },
+    )
+    assert overloaded.status_code == 422

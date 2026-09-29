@@ -698,6 +698,7 @@ class DeterministicResourceMatcher:
                 "is_manager": employee.is_manager,
                 "department_id": str(employee.department_id) if employee.department_id else None,
                 "approval_authority_limit": employee.approval_authority_limit,
+                **employee.workforce_snapshot(),
             },
         )
 
@@ -902,6 +903,7 @@ class DeterministicResourceMatcher:
             metadata={
                 "approval_status": supplier.approval_status,
                 "code": supplier.code,
+                **supplier.procurement_snapshot(),
             },
         )
 

@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Boolean, DateTime, Float, Integer, Numeric, Text, func
+from sqlalchemy import Boolean, Date, DateTime, Integer, Numeric, Text, func
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -78,6 +78,37 @@ class EmployeeModel(Base):
     role_code: Mapped[str | None] = mapped_column(Text)
     approval_authority_limit: Mapped[float | None] = mapped_column(Numeric(18, 2))
     approval_authority_currency: Mapped[str] = mapped_column(Text, nullable=False, default="USD")
+    phone: Mapped[str | None] = mapped_column(Text)
+    employment_type: Mapped[str] = mapped_column(Text, nullable=False, default="full_time")
+    join_date: Mapped[date | None] = mapped_column(Date)
+    manager_employee_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
+    team: Mapped[str | None] = mapped_column(Text)
+    business_unit: Mapped[str | None] = mapped_column(Text)
+    location: Mapped[str | None] = mapped_column(Text)
+    reporting_level: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    primary_skills: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    secondary_skills: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    certifications: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    years_of_experience: Mapped[float | None] = mapped_column(Numeric(5, 1))
+    skill_level: Mapped[str] = mapped_column(Text, nullable=False, default="intermediate")
+    availability_percent: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False, default=100)
+    weekly_capacity_hours: Mapped[float] = mapped_column(Numeric(6, 2), nullable=False, default=40)
+    current_workload_percent: Mapped[float] = mapped_column(
+        Numeric(5, 2), nullable=False, default=0
+    )
+    cost_per_hour: Mapped[float | None] = mapped_column(Numeric(18, 2))
+    monthly_cost: Mapped[float | None] = mapped_column(Numeric(18, 2))
+    max_allocation_percent: Mapped[float] = mapped_column(
+        Numeric(5, 2), nullable=False, default=100
+    )
+    approval_tier: Mapped[str] = mapped_column(Text, nullable=False, default="none")
+    can_approve_procurement: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    can_approve_budget: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    delegation_authority: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    tasks_completed: Mapped[int | None] = mapped_column(Integer)
+    avg_task_completion_hours: Mapped[float | None] = mapped_column(Numeric(8, 2))
+    sla_compliance_percent: Mapped[float | None] = mapped_column(Numeric(5, 2))
+    performance_score: Mapped[float | None] = mapped_column(Numeric(5, 2))
     metadata_json: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, nullable=False, default=dict)
     row_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -109,7 +140,43 @@ class SupplierModel(Base):
     website: Mapped[str | None] = mapped_column(Text)
     country_code: Mapped[str | None] = mapped_column(Text)
     approval_status: Mapped[str] = mapped_column(Text, nullable=False, default="pending")
-    metadata_json: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, nullable=False, default=dict)
+    supplier_number: Mapped[str | None] = mapped_column(Text)
+    city: Mapped[str | None] = mapped_column(Text)
+    address: Mapped[str | None] = mapped_column(Text)
+    business_registration_number: Mapped[str | None] = mapped_column(Text)
+    tax_number: Mapped[str | None] = mapped_column(Text)
+    primary_contact_name: Mapped[str | None] = mapped_column(Text)
+    primary_contact_email: Mapped[str | None] = mapped_column(Text)
+    primary_contact_phone: Mapped[str | None] = mapped_column(Text)
+    secondary_contact_name: Mapped[str | None] = mapped_column(Text)
+    secondary_contact_email: Mapped[str | None] = mapped_column(Text)
+    secondary_contact_phone: Mapped[str | None] = mapped_column(Text)
+    supplier_category: Mapped[str] = mapped_column(Text, nullable=False, default="other")
+    products_services: Mapped[str | None] = mapped_column(Text)
+    lead_time_days: Mapped[int | None] = mapped_column(Integer)
+    minimum_order_quantity: Mapped[float | None] = mapped_column(Numeric(18, 2))
+    payment_terms: Mapped[str | None] = mapped_column(Text)
+    preferred_currency: Mapped[str] = mapped_column(Text, nullable=False, default="USD")
+    risk_level: Mapped[str] = mapped_column(Text, nullable=False, default="low")
+    compliance_status: Mapped[str] = mapped_column(Text, nullable=False, default="pending")
+    insurance_valid: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    contract_start_date: Mapped[date | None] = mapped_column(Date)
+    contract_expiry_date: Mapped[date | None] = mapped_column(Date)
+    certification_details: Mapped[str | None] = mapped_column(Text)
+    supplier_rating: Mapped[float | None] = mapped_column(Numeric(3, 2))
+    on_time_delivery_percent: Mapped[float | None] = mapped_column(Numeric(5, 2))
+    quality_score_percent: Mapped[float | None] = mapped_column(Numeric(5, 2))
+    average_response_hours: Mapped[float | None] = mapped_column(Numeric(8, 2))
+    rejected_orders_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_orders_completed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    approval_tier: Mapped[str] = mapped_column(Text, nullable=False, default="none")
+    preferred_supplier: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    blacklisted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    suspension_reason: Mapped[str | None] = mapped_column(Text)
+    notes: Mapped[str | None] = mapped_column(Text)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(
+        "metadata", JSONB, nullable=False, default=dict
+    )
     row_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

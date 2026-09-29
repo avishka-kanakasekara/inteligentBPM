@@ -652,14 +652,70 @@ export const mockApi = {
         full_name: String(body.full_name),
         email,
         title: (body.title as string | null) ?? null,
+        department_id: (body.department_id as string | null) ?? null,
         is_manager: Boolean(body.is_manager),
-        status: "active",
+        status: body.status === "inactive" ? "inactive" : "active",
+        employee_code: `EMP-${String(employees.length + 1).padStart(4, "0")}`,
         role_code: (body.role_code as string | null) ?? null,
         approval_authority_limit: (body.approval_authority_limit as number | null) ?? null,
         approval_authority_currency: "USD",
+        phone: (body.phone as string | null) ?? null,
+        employment_type:
+          body.employment_type === "part_time" || body.employment_type === "contract"
+            ? body.employment_type
+            : "full_time",
+        join_date: (body.join_date as string | null) ?? null,
+        manager_employee_id: (body.manager_employee_id as string | null) ?? null,
+        team: (body.team as string | null) ?? null,
+        business_unit: (body.business_unit as string | null) ?? null,
+        location: (body.location as string | null) ?? null,
+        reporting_level: Number(body.reporting_level ?? 1),
+        primary_skills: Array.isArray(body.primary_skills) ? (body.primary_skills as string[]) : [],
+        secondary_skills: Array.isArray(body.secondary_skills) ? (body.secondary_skills as string[]) : [],
+        certifications: Array.isArray(body.certifications) ? (body.certifications as string[]) : [],
+        years_of_experience: (body.years_of_experience as number | null) ?? null,
+        skill_level:
+          body.skill_level === "beginner" || body.skill_level === "expert"
+            ? body.skill_level
+            : "intermediate",
+        availability_percent: Number(body.availability_percent ?? 100),
+        weekly_capacity_hours: Number(body.weekly_capacity_hours ?? 40),
+        current_workload_percent: Number(body.current_workload_percent ?? 0),
+        cost_per_hour: (body.cost_per_hour as number | null) ?? null,
+        monthly_cost: (body.monthly_cost as number | null) ?? null,
+        max_allocation_percent: Number(body.max_allocation_percent ?? 100),
+        approval_tier:
+          body.approval_tier === "team" ||
+          body.approval_tier === "department" ||
+          body.approval_tier === "business_unit" ||
+          body.approval_tier === "executive"
+            ? body.approval_tier
+            : "none",
+        can_approve_procurement: Boolean(body.can_approve_procurement),
+        can_approve_budget: Boolean(body.can_approve_budget),
+        delegation_authority: Boolean(body.delegation_authority),
+        tasks_completed: (body.tasks_completed as number | null) ?? null,
+        avg_task_completion_hours: (body.avg_task_completion_hours as number | null) ?? null,
+        sla_compliance_percent: (body.sla_compliance_percent as number | null) ?? null,
+        performance_score: (body.performance_score as number | null) ?? null,
       };
       employees = [...employees, created];
       return created as T;
+    }
+    if (path.match(/^\/employees\/[^/]+$/) && method === "PATCH") {
+      const id = path.split("/")[2];
+      const index = employees.findIndex((employee) => employee.id === id);
+      if (index < 0) throw new ApiError("Not found", { code: "NOT_FOUND", status: 404 });
+      const current = employees[index];
+      const next: Employee = {
+        ...current,
+        ...(body as Partial<Employee>),
+        id: current.id,
+        organization_id: current.organization_id,
+        employee_code: current.employee_code,
+      };
+      employees = employees.map((employee) => (employee.id === id ? next : employee));
+      return next as T;
     }
     if (path.match(/\/employees\/[^/]+\/deactivate$/) && method === "POST") {
       const id = path.split("/")[2];
@@ -722,12 +778,38 @@ export const mockApi = {
     }
     if (path === "/suppliers" && method === "POST") {
       const created: Supplier = {
+        ...(body as Partial<Supplier>),
         id: crypto.randomUUID(),
         organization_id: ORG_ID,
         name: String(body.name),
         code: (body.code as string | null) ?? null,
-        status: "active",
+        status: body.status === "inactive" ? "inactive" : "active",
         approval_status: (body.approval_status as Supplier["approval_status"]) ?? "pending",
+        supplier_number: `SUP-${String(suppliers.length + 1).padStart(4, "0")}`,
+        supplier_category:
+          body.supplier_category === "raw_materials" ||
+          body.supplier_category === "manufacturing" ||
+          body.supplier_category === "logistics" ||
+          body.supplier_category === "it_services" ||
+          body.supplier_category === "consulting" ||
+          body.supplier_category === "finance"
+            ? body.supplier_category
+            : "other",
+        risk_level:
+          body.risk_level === "medium" || body.risk_level === "high" ? body.risk_level : "low",
+        compliance_status:
+          body.compliance_status === "compliant" ||
+          body.compliance_status === "non_compliant" ||
+          body.compliance_status === "expired"
+            ? body.compliance_status
+            : "pending",
+        approval_tier:
+          body.approval_tier === "team" ||
+          body.approval_tier === "department" ||
+          body.approval_tier === "business_unit" ||
+          body.approval_tier === "executive"
+            ? body.approval_tier
+            : "none",
       };
       suppliers = [...suppliers, created];
       return created as T;
