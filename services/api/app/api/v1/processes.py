@@ -255,6 +255,60 @@ async def get_process(
     return ProcessResponse.model_validate(record, from_attributes=True)
 
 
+_TERMINAL_PROCESS_STATUSES = frozenset({"completed", "cancelled"})
+
+
+@router.post("/{process_id}/complete", response_model=ProcessSummaryResponse)
+async def complete_process(
+    process_id: UUID,
+    request: Request,
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    org: Annotated[OrganizationContext, Depends(require_permission(perm.EXECUTION_RUN))],
+) -> ProcessSummaryResponse:
+    """Human-confirmed terminal completion for a process."""
+    from app.database.memory import get_memory_store
+    from app.domain.enums import ProcessRunStatus
+    from app.repositories.memory_repos import ProcessRunRepository
+    from app.security.errors import AppError
+
+    repo = ProcessRepository(org.organization_id)
+    record = repo.get(process_id)
+    previous_status = record.status
+    if previous_status in _TERMINAL_PROCESS_STATUSES:
+        raise AppError(
+            f"Process is already {previous_status}",
+            code="PROCESS_ALREADY_TERMINAL",
+            status_code=400,
+        )
+
+    record = repo.set_status(process_id, "completed")
+
+    # Close any non-terminal runs for this process.
+    store = get_memory_store()
+    run_repo = ProcessRunRepository(org.organization_id)
+    for run in list(store.process_runs.values()):
+        if run.organization_id != org.organization_id or run.process_id != process_id:
+            continue
+        if run.status in {
+            ProcessRunStatus.COMPLETED,
+            ProcessRunStatus.CANCELLED,
+            ProcessRunStatus.FAILED,
+        }:
+            continue
+        run_repo.set_status(run.id, ProcessRunStatus.COMPLETED)
+
+    AuditService().record(
+        organization_id=org.organization_id,
+        actor_user_id=user.id,
+        action="process.completed",
+        resource_type="process",
+        resource_id=process_id,
+        correlation_id=get_correlation_id(request),
+        payload={"result": "completed", "previous_status": previous_status},
+    )
+    return _build_process_summary(record, org.organization_id)
+
+
 @router.post("/{process_id}/versions", response_model=ProcessVersionResponse, status_code=201)
 async def create_process_version(
     process_id: UUID,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Any
 from urllib.parse import urlparse
 
 # Only explicitly allowlisted hosts may appear in tool outputs that reference URLs.
@@ -37,7 +38,9 @@ def assert_url_allowed(url: str, *, allowed_hosts: frozenset[str] | None = None)
         raise ValueError(f"Outbound URL host not on allowlist: {host}")
 
 
-def sanitize_outbound_urls(payload: dict, *, allowed_hosts: frozenset[str] | None = None) -> dict:
+def sanitize_outbound_urls(
+    payload: dict[str, Any], *, allowed_hosts: frozenset[str] | None = None
+) -> dict[str, Any]:
     """Reject payloads containing non-allowlisted or SSRF-unsafe URLs."""
     from app.security.ssrf import assert_safe_outbound_url
 

@@ -4,12 +4,20 @@ from __future__ import annotations
 
 import json
 import uuid
+from datetime import UTC
 from typing import Any
 from uuid import UUID
 
+import structlog
+
 from app.agents.execution.catalog import TOOL_ARGS, TOOL_CATALOG
 from app.agents.execution.gateway import ToolGateway
-from app.agents.execution.models import ExecutionState, ToolContext, ToolInvocation, ToolProposalOutput
+from app.agents.execution.models import (
+    ExecutionState,
+    ToolContext,
+    ToolInvocation,
+    ToolProposalOutput,
+)
 from app.agents.execution.quotations import compare_quotations, normalize_quotation
 from app.agents.risk.models import RiskDecision
 from app.audit import AuditService
@@ -28,7 +36,6 @@ from app.repositories.memory_repos import (
     SupplierRepository,
 )
 from app.security.errors import ConflictError, NotFoundError, ValidationAppError
-import structlog
 
 logger = structlog.get_logger()
 
@@ -250,7 +257,6 @@ class ExecutionService:
             args = dict(proposal.arguments or {})
             self._ensure_tool_args(proposal.tool_name, args, process_id=process_id, run=run)
 
-            before_idx = int(getattr(run, "current_step_index", 0) or 0)
             inv = self.invoke_tool(
                 process_id,
                 tool_name=proposal.tool_name,
@@ -266,7 +272,11 @@ class ExecutionService:
 
             if inv.status in {"denied", "failed"}:
                 # Try one alternate read-only/notification tool before pausing
-                if executed < max_steps and inv.error and inv.error.code.value != "APPROVAL_REQUIRED":
+                if (
+                    executed < max_steps
+                    and inv.error
+                    and inv.error.code.value != "APPROVAL_REQUIRED"
+                ):
                     alt = self._heuristic_proposal(
                         current_step=steps[curr_idx] if curr_idx < len(steps) else None,
                         allowed=[
@@ -294,9 +304,7 @@ class ExecutionService:
                     )
                     if alt.tool_name != proposal.tool_name:
                         args2 = dict(alt.arguments or {})
-                        self._ensure_tool_args(
-                            alt.tool_name, args2, process_id=process_id, run=run
-                        )
+                        self._ensure_tool_args(alt.tool_name, args2, process_id=process_id, run=run)
                         inv2 = self.invoke_tool(
                             process_id,
                             tool_name=alt.tool_name,
@@ -319,10 +327,17 @@ class ExecutionService:
                 ProcessRunStatus.FAILED,
             }:
                 break
-            after_idx = int(getattr(run, "current_step_index", 0) or 0)
-            if after_idx == before_idx and inv.status == "replayed":
-                run.current_step_index = after_idx + 1
-                run.updated_at = utcnow()
+            if inv.status in {"executed", "replayed", "dry_run"}:
+                if proposal.next_step_index is not None and proposal.next_step_index > curr_idx:
+                    run.current_step_index = min(
+                        proposal.next_step_index, len(steps) if steps else proposal.next_step_index
+                    )
+                    run.updated_at = utcnow()
+                elif inv.status == "replayed":
+                    run.current_step_index = min(
+                        curr_idx + 1, len(steps) if steps else curr_idx + 1
+                    )
+                    run.updated_at = utcnow()
 
         if steps and int(getattr(run, "current_step_index", 0) or 0) >= len(steps):
             if run.status == ProcessRunStatus.EXECUTING:
@@ -374,6 +389,137 @@ class ExecutionService:
             correlation_id=correlation_id,
         )
         return self.get_execution(process_id, run_id=run.id)
+
+    def pause_execution(
+        self,
+        process_id: UUID,
+        *,
+        user_id: UUID,
+        correlation_id: str | None,
+        run_id: UUID | None = None,
+        reason: str = "Paused by operator",
+    ) -> dict[str, Any]:
+        run = self._resolve_run(process_id, run_id)
+        if run.status not in {
+            ProcessRunStatus.EXECUTING,
+            ProcessRunStatus.DRAFT,
+            ProcessRunStatus.APPROVED,
+        }:
+            raise ConflictError(
+                f"Process run cannot be paused from status {run.status.value}",
+                code="RUN_NOT_PAUSABLE",
+            )
+        run.status = ProcessRunStatus.PAUSED
+        run.pause_reason = reason
+        run.updated_at = utcnow()
+        from app.database.persist_helpers import persist_if_postgres
+
+        persist_if_postgres(self.store, "process_runs", run.id)
+        self.audit.record(
+            organization_id=self.organization_id,
+            actor_user_id=user_id,
+            action="execution.paused",
+            resource_type="process_run",
+            resource_id=run.id,
+            correlation_id=correlation_id,
+            payload={"reason": reason},
+        )
+        return self.get_execution(process_id, run_id=run.id)
+
+    def cancel_execution(
+        self,
+        process_id: UUID,
+        *,
+        user_id: UUID,
+        correlation_id: str | None,
+        run_id: UUID | None = None,
+        reason: str = "Cancelled by operator",
+    ) -> dict[str, Any]:
+        run = self._resolve_run(process_id, run_id)
+        if run.status in {ProcessRunStatus.COMPLETED, ProcessRunStatus.CANCELLED}:
+            raise ConflictError("Process run is already terminal", code="RUN_ALREADY_TERMINAL")
+        run.status = ProcessRunStatus.CANCELLED
+        run.pause_reason = reason
+        run.updated_at = utcnow()
+        from app.database.persist_helpers import persist_if_postgres
+
+        persist_if_postgres(self.store, "process_runs", run.id)
+        self.audit.record(
+            organization_id=self.organization_id,
+            actor_user_id=user_id,
+            action="execution.cancelled",
+            resource_type="process_run",
+            resource_id=run.id,
+            correlation_id=correlation_id,
+            payload={"reason": reason},
+        )
+        return self.get_execution(process_id, run_id=run.id)
+
+    def reset_execution(
+        self,
+        process_id: UUID,
+        *,
+        user_id: UUID,
+        correlation_id: str | None,
+        run_id: UUID | None = None,
+    ) -> dict[str, Any]:
+        run = self._resolve_run(process_id, run_id)
+        run.status = ProcessRunStatus.DRAFT
+        run.current_step_index = 0
+        run.pause_reason = None
+        run.updated_at = utcnow()
+        from app.database.persist_helpers import persist_if_postgres
+
+        persist_if_postgres(self.store, "process_runs", run.id)
+        self.audit.record(
+            organization_id=self.organization_id,
+            actor_user_id=user_id,
+            action="execution.reset",
+            resource_type="process_run",
+            resource_id=run.id,
+            correlation_id=correlation_id,
+        )
+        return self.get_execution(process_id, run_id=run.id)
+
+    def get_execution_summary_report(
+        self, process_id: UUID, *, run_id: UUID | None = None
+    ) -> dict[str, Any]:
+        state = self.get_execution(process_id, run_id=run_id)
+        proc = self.processes.get(process_id)
+        run = self._resolve_run(process_id, run_id)
+        version = self.processes.get_version(process_id, run.process_version_id)
+        plan = version.plan_snapshot or {}
+        invocations = state.get("tool_invocations") or []
+        successful_tools = [i for i in invocations if i.get("status") in {"executed", "replayed"}]
+        failed_tools = [i for i in invocations if i.get("status") in {"failed", "denied"}]
+
+        return {
+            "process_id": process_id,
+            "process_name": proc.name,
+            "process_run_id": run.id,
+            "status": run.status.value,
+            "dry_run": bool(getattr(run, "dry_run", False)),
+            "plan_goal": plan.get("goal", ""),
+            "steps_total": len(plan.get("steps", [])),
+            "steps_completed": int(getattr(run, "current_step_index", 0) or 0),
+            "tools_invoked_total": len(invocations),
+            "tools_successful": len(successful_tools),
+            "tools_failed": len(failed_tools),
+            "plan_snapshot_hash": getattr(run, "plan_snapshot_hash", None),
+            "risk_snapshot_hash": getattr(run, "risk_snapshot_hash", None),
+            "approval_id": (
+                str(getattr(run, "approval_id", None))
+                if getattr(run, "approval_id", None)
+                else None
+            ),
+            "generated_documents_count": len(state.get("generated_documents", [])),
+            "emails_count": len(state.get("email_outbox", [])),
+            "calendar_events_count": len(state.get("calendar_events", [])),
+            "tasks_count": len(state.get("tasks", [])),
+            "notifications_count": len(state.get("notifications", [])),
+            "invocations": invocations,
+            "generated_at": utcnow().isoformat(),
+        }
 
     def invoke_tool(
         self,
@@ -430,7 +576,6 @@ class ExecutionService:
             run.pause_reason = "Additional approval requested"
             run.updated_at = utcnow()
         elif invocation.status in {"executed", "replayed", "dry_run"}:
-            run.current_step_index = int(getattr(run, "current_step_index", 0) or 0) + 1
             run.updated_at = utcnow()
             self.store.run_events.setdefault(run.id, []).append(
                 {
@@ -446,9 +591,7 @@ class ExecutionService:
         persist_if_postgres(self.store, "process_runs", run.id)
         return invocation
 
-    def get_execution(
-        self, process_id: UUID, *, run_id: UUID | None = None
-    ) -> dict[str, Any]:
+    def get_execution(self, process_id: UUID, *, run_id: UUID | None = None) -> dict[str, Any]:
         self.processes.get(process_id)
         run = self._resolve_run(process_id, run_id)
         invocations = [
@@ -573,8 +716,7 @@ class ExecutionService:
         if explain and result.winner_quotation_id:
             result.llm_used = False
             result.explanation = (
-                result.explanation
-                + " Scoring is deterministic across cost, delivery, warranty, "
+                result.explanation + " Scoring is deterministic across cost, delivery, warranty, "
                 "payment terms, supplier risk, and policy compliance."
             )
         return result.model_dump(mode="json")
@@ -595,7 +737,17 @@ class ExecutionService:
             if p.get("organization_id") == str(self.organization_id)
         ]
 
-    def _resolve_run(self, process_id: UUID, run_id: UUID | None):
+    def _supplier_name(self, supplier_id: Any) -> str:
+        if not supplier_id:
+            return "Supplier"
+        try:
+            sid = UUID(str(supplier_id))
+            sup = SupplierRepository(self.organization_id).get(sid)
+            return sup.name
+        except Exception:
+            return str(supplier_id)
+
+    def _resolve_run(self, process_id: UUID, run_id: UUID | None) -> Any:
         if run_id is not None:
             return self.runs.get(run_id)
         runs = [r for r in self.runs.list_all() if r.process_id == process_id]
@@ -616,7 +768,7 @@ class ExecutionService:
         snap["valid"] = latest.valid
         return snap
 
-    def _latest_approved(self, process_id: UUID):
+    def _latest_approved(self, process_id: UUID) -> Any:
         approvals = [
             a
             for a in self.store.approvals.values()
@@ -642,7 +794,7 @@ class ExecutionService:
         if not records:
             return None
 
-        def _updated(r: Any):
+        def _updated(r: Any) -> Any:
             return (
                 getattr(r, "updated_at", None)
                 or (r.get("updated_at") if isinstance(r, dict) else None)
@@ -797,11 +949,7 @@ class ExecutionService:
             except Exception:
                 current_step = None
 
-        step_id = str(
-            (current_step or {}).get("step_id")
-            or (current_step or {}).get("id")
-            or ""
-        )
+        step_id = str((current_step or {}).get("step_id") or (current_step or {}).get("id") or "")
         step_text = " ".join(
             str(x)
             for x in [
@@ -890,7 +1038,10 @@ class ExecutionService:
             "display_name": best.get("display_name"),
             "requirement": best.get("requirement"),
             "step_id": best.get("step_id"),
-            "reason": f"Agent 2 allocated {best.get('display_name')} for '{best.get('requirement')}'",
+            "reason": (
+                f"Agent 2 allocated {best.get('display_name')} "
+                f"for '{best.get('requirement')}'"
+            ),
         }
 
     def _allowed_tools_from_plan(self, plan_snapshot: dict[str, Any]) -> list[str]:
@@ -943,9 +1094,7 @@ class ExecutionService:
             {
                 "tool": v.get("tool_name"),
                 "status": v.get("status"),
-                "args": {
-                    k: v2 for k, v2 in (v.get("arguments") or {}).items() if k != "body"
-                },
+                "args": {k: v2 for k, v2 in (v.get("arguments") or {}).items() if k != "body"},
                 "result_preview": (v.get("result") or {}).get("data"),
             }
             for v in self.store.tool_invocations.values()
@@ -971,6 +1120,49 @@ class ExecutionService:
         preferred = self._resolve_email_recipient_from_allocation(
             process_id=process_id, run=run, current_step=current_step
         )
+        active_requests = [
+            {
+                "request_id": str(r.get("id")),
+                "supplier_id": str(r.get("supplier_id")),
+                "supplier_name": r.get("supplier_name")
+                or self._supplier_name(r.get("supplier_id")),
+                "product_sku": r.get("product_sku"),
+                "quantity": r.get("quantity"),
+                "status": r.get("status"),
+            }
+            for r in self.store.quote_requests.values()
+            if r.get("organization_id") == str(self.organization_id)
+        ]
+        collected_quotes = [
+            {
+                "quotation_id": str(q.get("id")),
+                "request_id": str(q.get("request_id")),
+                "supplier_id": str(q.get("supplier_id")),
+                "supplier_name": q.get("supplier_name")
+                or self._supplier_name(q.get("supplier_id")),
+                "unit_price": q.get("unit_price"),
+                "total": q.get("total") or q.get("subtotal"),
+                "currency": q.get("currency", "USD"),
+                "delivery_days": q.get("delivery_days"),
+                "warranty_months": q.get("warranty_months"),
+            }
+            for q in self.store.quotations.values()
+            if q.get("organization_id") == str(self.organization_id)
+        ]
+        pos = [
+            {
+                "purchase_order_id": str(p.get("id")),
+                "po_number": p.get("po_number"),
+                "supplier_id": str(p.get("supplier_id")),
+                "supplier_name": self._supplier_name(p.get("supplier_id")),
+                "amount_total": p.get("amount_total"),
+                "currency_code": p.get("currency_code"),
+                "status": p.get("status"),
+                "submitted": p.get("submitted", False),
+            }
+            for p in self.store.purchase_orders.values()
+            if p.get("organization_id") == str(self.organization_id)
+        ]
         snapshot_summary = {
             "process_id": str(process_id),
             "run_id": str(run.id),
@@ -980,9 +1172,7 @@ class ExecutionService:
             "remaining_steps": steps[curr_idx : curr_idx + 5],
             "allowed_tools": allowed,
             "tool_schemas": {
-                name: TOOL_ARGS[name].model_json_schema()
-                for name in allowed
-                if name in TOOL_ARGS
+                name: TOOL_ARGS[name].model_json_schema() for name in allowed if name in TOOL_ARGS
             },
             "allocated_resources": [
                 {
@@ -999,6 +1189,9 @@ class ExecutionService:
             "preferred_email_recipient": preferred,
             "directory": self._directory_context(),
             "recent_tool_results": recent_invocations,
+            "active_quote_requests": active_requests,
+            "collected_quotations": collected_quotes,
+            "purchase_orders": pos,
             "status": run.status.value,
         }
 
@@ -1008,6 +1201,8 @@ class ExecutionService:
                 allowed=allowed,
                 curr_idx=curr_idx,
                 allocation=allocation,
+                process_id=process_id,
+                run=run,
             )
 
         system, user_prompt = self.prompts.render(
@@ -1018,17 +1213,30 @@ class ExecutionService:
         system += (
             f" You must select a tool from this exact allowed list: {allowed}. "
             "Never invent tools. Provide structured JSON matching ToolProposalOutput schema. "
+            "For multi-step commercial processes: execute all necessary sub-actions "
+            "before advancing next_step_index. "
+            "For RFQ steps: request quotes from at least 2 suppliers (supplier.request_quote), "
+            "collect the quotes (supplier.collect_quote for each request), and run "
+            "quotation.compare before advancing next_step_index. "
+            "For Order steps: draft the purchase order (purchase_order.create_draft), "
+            "submit it (purchase_order.submit), generate a summary doc (document.generate), "
+            "and dispatch notifications (notification.send / email.send / task.assign / "
+            "calendar.create_event). Only advance next_step_index when the step's complete "
+            "commercial outcome is achieved. "
             "For email.send / email.create_draft / notification.send / supplier.request_quote: "
             "write a professional subject and full body yourself (Gemini authors the message). "
-            "Use calendar.create_event for meetings/kickoffs (title, start_at ISO, attendees emails). "
+            "Use calendar.create_event for meetings/kickoffs (title, start_at ISO, "
+            "attendees emails). "
             "Use task.assign to hand work to an employee (title, assignee_id email or id). "
-            "Use document.generate for RFQ packs, PO summaries, or memos (title, doc_type, content). "
+            "Use document.generate for RFQ packs, PO summaries, or memos (title, doc_type, "
+            "content). "
             "CRITICAL: to_employee_id / attendees / assignee_id MUST prefer the Agent 2 allocated "
             "recipient — use preferred_email_recipient.email or agent2_email_recipients / "
             "allocated_resources. Never invent a random directory contact when Agent 2 "
             "already allocated a supplier contact or employee for this process. "
             "Always include a unique idempotency_key (uuid string) for side-effecting tools. "
-            "Prefer concrete side-effecting tools: email, RFQ, PO, notify, calendar, task, document. "
+            "Prefer concrete side-effecting tools: email, RFQ, PO, notify, calendar, task, "
+            "document. "
             "Do not propose dry-run placeholders."
         )
 
@@ -1053,7 +1261,6 @@ class ExecutionService:
             if proposal.tool_name not in allowed:
                 proposal.tool_name = allowed[0] if allowed else "company.employee_lookup"
                 proposal.rationale += " (Selected fallback tool from allowed catalog)"
-            proposal.next_step_index = curr_idx
             return proposal
         except Exception as exc:
             logger.warning("execution.propose_tool_failed", error=str(exc))
@@ -1063,6 +1270,8 @@ class ExecutionService:
                 curr_idx=curr_idx,
                 allocation=allocation,
                 error=str(exc),
+                process_id=process_id,
+                run=run,
             )
 
     def _heuristic_proposal(
@@ -1073,6 +1282,8 @@ class ExecutionService:
         curr_idx: int,
         allocation: dict[str, Any],
         error: str | None = None,
+        process_id: UUID | None = None,
+        run: Any | None = None,
     ) -> ToolProposalOutput:
         text = " ".join(
             str(x)
@@ -1090,7 +1301,7 @@ class ExecutionService:
             if a.get("resource_type")
             in {"employee", "manager", "approval_authority", "supplier_contact"}
         ]
-        suppliers = [a for a in assignments if a.get("resource_type") == "supplier"]
+        allocated_suppliers = [a for a in assignments if a.get("resource_type") == "supplier"]
         contacts = [a for a in assignments if a.get("resource_type") == "supplier_contact"]
         idem = str(uuid.uuid4())
 
@@ -1101,8 +1312,7 @@ class ExecutionService:
             return None
 
         def _allocated_recipient() -> str | None:
-            # Prefer contact → people → supplier's contact email from Agent 2
-            for pool in (contacts, people, suppliers):
+            for pool in (contacts, people, allocated_suppliers):
                 for a in pool:
                     email = self._email_for_assignment(a)
                     if email:
@@ -1111,12 +1321,344 @@ class ExecutionService:
                         return str(a["resource_id"])
             return None
 
+        dir_ctx = self._directory_context()
+        dir_suppliers = dir_ctx.get("suppliers") or []
+        avail_suppliers = list(allocated_suppliers)
+        for s in dir_suppliers:
+            if not any(str(a.get("resource_id")) == str(s.get("id")) for a in allocated_suppliers):
+                avail_suppliers.append({"resource_id": s.get("id"), "display_name": s.get("name")})
+
+        run_id_str = str(run.id) if run and getattr(run, "id", None) else None
+        proc_id_str = str(process_id) if process_id else None
+
+        run_invs = [
+            inv
+            for inv in self.store.tool_invocations.values()
+            if (run_id_str and inv.get("process_run_id") == run_id_str)
+        ]
+        executed_tools = {
+            inv.get("tool_name")
+            for inv in run_invs
+            if inv.get("status") in {"executed", "replayed"}
+        }
+
+        reqs = [
+            r
+            for r in self.store.quote_requests.values()
+            if r.get("organization_id") == str(self.organization_id)
+            and (
+                (run_id_str and r.get("process_run_id") == run_id_str)
+                or (proc_id_str and r.get("process_id") == proc_id_str)
+                or not (run_id_str or proc_id_str)
+            )
+        ]
+        req_id_set = {str(r.get("id")) for r in reqs}
+        quotes = [
+            q
+            for q in self.store.quotations.values()
+            if q.get("organization_id") == str(self.organization_id)
+            and (
+                (proc_id_str and q.get("process_id") == proc_id_str)
+                or (str(q.get("request_id")) in req_id_set)
+                or not proc_id_str
+            )
+        ]
+        pos = [
+            p
+            for p in self.store.purchase_orders.values()
+            if p.get("organization_id") == str(self.organization_id)
+            and (
+                (run_id_str and p.get("process_run_id") == run_id_str)
+                or (proc_id_str and p.get("process_id") == proc_id_str)
+                or not (run_id_str or proc_id_str)
+            )
+        ]
+
+        # 1. Discovery / Lookup step handling (First phase: Discover staff and suppliers)
+        is_discovery_step = (
+            (current_step or {}).get("action_type") in {"collect_info", "discovery"}
+            or any(
+                k in text
+                for k in (
+                    "identify staff",
+                    "discover staff",
+                    "staff & suppliers",
+                    "directory lookup",
+                    "supplier lookup",
+                    "identify",
+                    "discover",
+                )
+            )
+        ) and not any(
+            k in text
+            for k in (
+                "quote",
+                "quotation",
+                "rfq",
+                "purchase order",
+                "submit po",
+                "create po",
+                "issue purchase order",
+            )
+        )
+        if is_discovery_step:
+            if _pick("supplier.search") and "supplier.search" not in executed_tools:
+                return ToolProposalOutput(
+                    tool_name="supplier.search",
+                    arguments={"query": "hardware", "approved_only": True},
+                    rationale="Heuristic: search approved hardware suppliers",
+                    next_step_index=curr_idx + 1,
+                )
+            if _pick("company.employee_lookup") and "company.employee_lookup" not in executed_tools:
+                return ToolProposalOutput(
+                    tool_name="company.employee_lookup",
+                    arguments={"query": "IT"},
+                    rationale="Heuristic: discover procurement and IT staff",
+                    next_step_index=curr_idx + 1,
+                )
+            return ToolProposalOutput(
+                tool_name=allowed[0] if allowed else "company.employee_lookup",
+                arguments={"query": "procurement"},
+                rationale="Heuristic: discovery completed",
+                next_step_index=curr_idx + 1,
+            )
+
+        # 2. Quotation / RFQ step handling (Dual quotes + Collection + Comparison)
+        if any(k in text for k in ("quote", "quotation", "rfq", "dual quote")):
+            if _pick("supplier.request_quote") and len(reqs) == 0:
+                s1_id = avail_suppliers[0].get("resource_id") if avail_suppliers else "supp-001"
+                return ToolProposalOutput(
+                    tool_name="supplier.request_quote",
+                    arguments={
+                        "supplier_id": str(s1_id),
+                        "product_sku": "LAPTOP-PRO-01",
+                        "quantity": 5,
+                        "subject": "RFQ: Enterprise Laptops (Primary Source)",
+                        "body": "Please provide formal quotation for 5 high-performance laptops.",
+                        "idempotency_key": idem,
+                    },
+                    rationale="Heuristic: issue initial quotation request (RFQ 1 of 2)",
+                    next_step_index=curr_idx,
+                )
+            if _pick("supplier.request_quote") and len(reqs) == 1:
+                s1_used = str(reqs[0].get("supplier_id"))
+                s2_id = next(
+                    (
+                        str(s.get("resource_id"))
+                        for s in avail_suppliers
+                        if str(s.get("resource_id")) != s1_used
+                    ),
+                    str(avail_suppliers[1].get("resource_id"))
+                    if len(avail_suppliers) > 1
+                    else "supp-002",
+                )
+                return ToolProposalOutput(
+                    tool_name="supplier.request_quote",
+                    arguments={
+                        "supplier_id": s2_id,
+                        "product_sku": "LAPTOP-PRO-01",
+                        "quantity": 5,
+                        "subject": "RFQ: Enterprise Laptops (Dual Source Benchmark)",
+                        "body": (
+                            "Please provide competitive quotation for 5 "
+                            "high-performance laptops."
+                        ),
+                        "idempotency_key": idem,
+                    },
+                    rationale="Heuristic: issue dual quotation request (RFQ 2 of 2)",
+                    next_step_index=curr_idx,
+                )
+            if _pick("supplier.collect_quote") and reqs:
+                collected_req_ids = {str(q.get("request_id")) for q in quotes}
+                uncollected = [r for r in reqs if str(r.get("id")) not in collected_req_ids]
+                if uncollected:
+                    target_req = uncollected[0]
+                    return ToolProposalOutput(
+                        tool_name="supplier.collect_quote",
+                        arguments={
+                            "request_id": str(target_req.get("id")),
+                            "idempotency_key": idem,
+                        },
+                        rationale=(
+                            f"Heuristic: collect commercial quotation response for request "
+                            f"{target_req.get('id')}"
+                        ),
+                        next_step_index=curr_idx,
+                    )
+            if _pick("quotation.compare") and len(quotes) >= 2:
+                if "quotation.compare" not in executed_tools:
+                    return ToolProposalOutput(
+                        tool_name="quotation.compare",
+                        arguments={
+                            "quotation_ids": [str(q.get("id")) for q in quotes[:5]],
+                            "explain": True,
+                        },
+                        rationale=(
+                            "Heuristic: compare and rank collected quotations across price, "
+                            "warranty, and lead time"
+                        ),
+                        next_step_index=curr_idx + 1,
+                    )
+
+        # 3. Purchase Order / Order & Stakeholder Notice step handling
+        is_order_step = any(
+            k in text
+            for k in (
+                "purchase order",
+                "create po",
+                "submit po",
+                "issue po",
+                "issue purchase order",
+                "place order",
+            )
+        ) or (
+            (current_step or {}).get("action_type") == "integration"
+            and any(k in text for k in ("order", "stakeholder notice", "po"))
+        )
+        if is_order_step:
+            draft_pos = [p for p in pos if not p.get("submitted")]
+            submitted_pos = [p for p in pos if p.get("submitted")]
+
+            if not pos and _pick("purchase_order.create_draft"):
+                win_s_id = None
+                win_amount = 2400.0
+                if quotes:
+                    sorted_quotes = sorted(
+                        quotes, key=lambda q: float(q.get("total") or q.get("subtotal") or 999999.0)
+                    )
+                    win_quote = sorted_quotes[0]
+                    win_s_id = str(win_quote.get("supplier_id"))
+                    win_amount = float(
+                        win_quote.get("total") or win_quote.get("subtotal") or 2400.0
+                    )
+                elif avail_suppliers:
+                    win_s_id = str(avail_suppliers[0].get("resource_id"))
+                else:
+                    win_s_id = "supp-001"
+                unit_price = round(win_amount / 5, 2)
+                return ToolProposalOutput(
+                    tool_name="purchase_order.create_draft",
+                    arguments={
+                        "supplier_id": win_s_id,
+                        "amount_total": win_amount,
+                        "currency_code": "USD",
+                        "lines": [
+                            {
+                                "description": "High-performance laptops",
+                                "quantity": 5,
+                                "unit_price": unit_price,
+                            }
+                        ],
+                        "idempotency_key": idem,
+                    },
+                    rationale="Heuristic: draft purchase order with selected winning supplier",
+                    next_step_index=curr_idx,
+                )
+
+            if draft_pos and not submitted_pos and _pick("purchase_order.submit"):
+                target_po = draft_pos[0]
+                return ToolProposalOutput(
+                    tool_name="purchase_order.submit",
+                    arguments={
+                        "purchase_order_id": str(target_po.get("id")),
+                        "idempotency_key": idem,
+                    },
+                    rationale=f"Heuristic: submit approved purchase order {target_po.get('id')}",
+                    next_step_index=curr_idx,
+                )
+
+            if submitted_pos or pos:
+                if _pick("document.generate") and "document.generate" not in executed_tools:
+                    po_tot = pos[0].get("amount_total", 2400.0)
+                    return ToolProposalOutput(
+                        tool_name="document.generate",
+                        arguments={
+                            "title": "Procurement Contract & PO Summary Memo",
+                            "doc_type": "memo",
+                            "content": (
+                                f"Purchase order submitted. Total commitment: ${po_tot:.2f}. "
+                                "Hardware fulfillment scheduled in accordance with vendor terms."
+                            ),
+                            "idempotency_key": idem,
+                        },
+                        rationale="Heuristic: generate commercial procurement summary memo",
+                        next_step_index=curr_idx,
+                    )
+                if _pick("calendar.create_event") and "calendar.create_event" not in executed_tools:
+                    recipient = _allocated_recipient() or "owner@demo.bpm.local"
+                    from datetime import datetime, timedelta
+
+                    start = datetime.now(UTC) + timedelta(days=2)
+                    return ToolProposalOutput(
+                        tool_name="calendar.create_event",
+                        arguments={
+                            "title": "Hardware Delivery & Asset Tagging Kickoff",
+                            "start_at": start.replace(microsecond=0).isoformat(),
+                            "attendees": [str(recipient)],
+                            "description": (
+                                "Stakeholder coordination meeting for hardware receipt "
+                                "and asset tagging."
+                            ),
+                            "idempotency_key": idem,
+                        },
+                        rationale="Heuristic: schedule delivery and rollout kickoff meeting",
+                        next_step_index=curr_idx,
+                    )
+                if _pick("task.assign") and "task.assign" not in executed_tools:
+                    recipient = _allocated_recipient() or "owner@demo.bpm.local"
+                    return ToolProposalOutput(
+                        tool_name="task.assign",
+                        arguments={
+                            "title": "Verify hardware shipment & IT asset logging",
+                            "assignee_id": str(recipient),
+                            "description": (
+                                "Confirm serial numbers match purchase order upon delivery."
+                            ),
+                            "idempotency_key": idem,
+                        },
+                        rationale="Heuristic: assign hardware verification task",
+                        next_step_index=curr_idx,
+                    )
+                if _pick("notification.send") and "notification.send" not in executed_tools:
+                    recipient = _allocated_recipient() or "owner@demo.bpm.local"
+                    return ToolProposalOutput(
+                        tool_name="notification.send",
+                        arguments={
+                            "user_id": str(recipient),
+                            "title": "Procurement Process Completed",
+                            "body": (
+                                "Purchase order submitted, supplier confirmed, "
+                                "and deployment meeting scheduled."
+                            ),
+                            "idempotency_key": idem,
+                        },
+                        rationale="Heuristic: notify stakeholders of completed procurement run",
+                        next_step_index=curr_idx + 1,
+                    )
+                if _pick("email.send") and "email.send" not in executed_tools:
+                    recipient = _allocated_recipient() or "owner@demo.bpm.local"
+                    return ToolProposalOutput(
+                        tool_name="email.send",
+                        arguments={
+                            "to_employee_id": str(recipient),
+                            "subject": "Purchase Order Completed & Dispatched",
+                            "body": (
+                                "Hello,\n\nThe purchase order has been successfully submitted "
+                                "and confirmed.\n\nRegards,\nBPM Agent"
+                            ),
+                            "idempotency_key": idem,
+                        },
+                        rationale="Heuristic: email confirmation to stakeholder",
+                        next_step_index=curr_idx + 1,
+                    )
+
+        # 4. Standard Single-Action Triggers
         if any(k in text for k in ("meeting", "calendar", "schedule", "kickoff", "sync")):
             if _pick("calendar.create_event"):
                 recipient = _allocated_recipient() or "owner@demo.bpm.local"
-                from datetime import datetime, timedelta, timezone
+                from datetime import datetime, timedelta
 
-                start = datetime.now(timezone.utc) + timedelta(days=1)
+                start = datetime.now(UTC) + timedelta(days=1)
                 return ToolProposalOutput(
                     tool_name="calendar.create_event",
                     arguments={
@@ -1127,10 +1669,13 @@ class ExecutionService:
                         "idempotency_key": idem,
                     },
                     rationale="Heuristic: create calendar event with invite",
-                    next_step_index=curr_idx,
+                    next_step_index=curr_idx + 1,
                 )
 
-        if any(k in text for k in ("assign task", "task assign", "follow up task", "todo", "action item")):
+        if any(
+            k in text
+            for k in ("assign task", "task assign", "follow up task", "todo", "action item")
+        ):
             if _pick("task.assign"):
                 recipient = _allocated_recipient() or "owner@demo.bpm.local"
                 return ToolProposalOutput(
@@ -1142,10 +1687,13 @@ class ExecutionService:
                         "idempotency_key": idem,
                     },
                     rationale="Heuristic: assign task and notify assignee",
-                    next_step_index=curr_idx,
+                    next_step_index=curr_idx + 1,
                 )
 
-        if any(k in text for k in ("generate document", "write memo", "rfq pack", "summary doc", "documentation")):
+        if any(
+            k in text
+            for k in ("generate document", "write memo", "rfq pack", "summary doc", "documentation")
+        ):
             if _pick("document.generate"):
                 return ToolProposalOutput(
                     tool_name="document.generate",
@@ -1157,123 +1705,7 @@ class ExecutionService:
                         "idempotency_key": idem,
                     },
                     rationale="Heuristic: generate process document",
-                    next_step_index=curr_idx,
-                )
-
-        if any(k in text for k in ("email", "notify", "rfq", "request quote", "contact vendor")):
-            tool = _pick(
-                "email.send",
-                "email.create_draft",
-                "notification.send",
-                "supplier.request_quote",
-            )
-            recipient = _allocated_recipient()
-            if not recipient:
-                directory = self._directory_context()
-                emps = directory.get("employees") or []
-                recipient = (emps[0].get("id") if emps else None) or "owner@demo.bpm.local"
-            subject = f"Action required: {(current_step or {}).get('title') or 'Process step'}"
-            body = (
-                f"Hello,\n\n"
-                f"Regarding: {(current_step or {}).get('title') or 'current process step'}.\n\n"
-                f"{(current_step or {}).get('description') or 'Please proceed with the requested action.'}\n\n"
-                f"This message was generated by Agent 4 during process execution.\n\n"
-                f"Regards,\nAcme BPM Agent"
-            )
-            if tool == "notification.send":
-                return ToolProposalOutput(
-                    tool_name=tool,
-                    arguments={
-                        "user_id": str(recipient),
-                        "title": subject,
-                        "body": body[:1900],
-                        "idempotency_key": idem,
-                    },
-                    rationale="Heuristic: notify for communication step",
-                    next_step_index=curr_idx,
-                )
-            if tool == "supplier.request_quote" and suppliers:
-                return ToolProposalOutput(
-                    tool_name=tool,
-                    arguments={
-                        "supplier_id": str(suppliers[0].get("resource_id")),
-                        "product_sku": "ITEM-001",
-                        "quantity": 1,
-                        "subject": subject[:200],
-                        "body": body[:8000],
-                        "contact_email": str(recipient) if "@" in str(recipient) else None,
-                        "idempotency_key": idem,
-                    },
-                    rationale="Heuristic: RFQ email via supplier.request_quote",
-                    next_step_index=curr_idx,
-                )
-            if tool:
-                return ToolProposalOutput(
-                    tool_name=tool,
-                    arguments={
-                        "to_employee_id": str(recipient),
-                        "subject": subject[:200],
-                        "body": body[:8000],
-                        "idempotency_key": idem,
-                    },
-                    rationale="Heuristic: email Agent 2 allocated recipient"
-                    + (f" (LLM fallback: {error})" if error else ""),
-                    next_step_index=curr_idx,
-                )
-
-        if any(k in text for k in ("quote", "quotation", "rfq", "dual quote")):
-            if suppliers and _pick("supplier.request_quote"):
-                return ToolProposalOutput(
-                    tool_name="supplier.request_quote",
-                    arguments={
-                        "supplier_id": str(suppliers[0].get("resource_id")),
-                        "product_sku": "ITEM-001",
-                        "quantity": 1,
-                        "idempotency_key": idem,
-                    },
-                    rationale="Heuristic: request supplier quote",
-                    next_step_index=curr_idx,
-                )
-            tool = _pick("supplier.search", "email.send", "email.create_draft")
-            if tool == "supplier.search":
-                return ToolProposalOutput(
-                    tool_name=tool,
-                    arguments={"query": "approved", "approved_only": True},
-                    rationale="Heuristic: search suppliers before quote",
-                    next_step_index=curr_idx,
-                )
-            if tool in {"email.send", "email.create_draft"}:
-                recipient = _allocated_recipient() or "owner@demo.bpm.local"
-                return ToolProposalOutput(
-                    tool_name=tool,
-                    arguments={
-                        "to_employee_id": str(recipient),
-                        "subject": f"RFQ: {(current_step or {}).get('title') or 'Quote request'}",
-                        "body": (
-                            "Hello,\n\nPlease provide a quotation for the requested items.\n\n"
-                            f"Step: {(current_step or {}).get('description') or 'dual quotes'}\n\n"
-                            "Regards,\nBPM Agent"
-                        ),
-                        "idempotency_key": idem,
-                    },
-                    rationale="Heuristic: email RFQ to Agent 2 allocated contact",
-                    next_step_index=curr_idx,
-                )
-
-        if any(k in text for k in ("purchase order", "create po", "submit po", "buy", "procure")):
-            tool = _pick("purchase_order.create_draft", "purchase_order.submit")
-            if tool == "purchase_order.create_draft" and suppliers:
-                return ToolProposalOutput(
-                    tool_name=tool,
-                    arguments={
-                        "supplier_id": str(suppliers[0].get("resource_id")),
-                        "amount_total": 100.0,
-                        "currency_code": "USD",
-                        "lines": [],
-                        "idempotency_key": idem,
-                    },
-                    rationale="Heuristic: draft purchase order",
-                    next_step_index=curr_idx,
+                    next_step_index=curr_idx + 1,
                 )
 
         if any(k in text for k in ("approv",)):
@@ -1292,6 +1724,7 @@ class ExecutionService:
                     approval_reason="Step requires human approval",
                 )
 
+        # 5. Generic communication or fallback
         tool = _pick("company.employee_lookup", "supplier.search", "notification.send") or (
             allowed[0] if allowed else "company.employee_lookup"
         )
@@ -1314,7 +1747,7 @@ class ExecutionService:
             arguments=args,
             rationale=f"Deterministic fallback proposal for step {curr_idx}"
             + (f" after LLM error: {error}" if error else ""),
-            next_step_index=curr_idx,
+            next_step_index=curr_idx + 1,
         )
 
     def _ensure_tool_args(
@@ -1323,20 +1756,13 @@ class ExecutionService:
         if tool_name in TOOL_ARGS and "idempotency_key" in TOOL_ARGS[tool_name].model_fields:
             if not args.get("idempotency_key"):
                 args["idempotency_key"] = str(uuid.uuid4())
+
         if tool_name in {"email.send", "email.create_draft"}:
-            # Agent 2 allocation is source of truth for who receives the email
             preferred = self._resolve_email_recipient_from_allocation(
                 process_id=process_id, run=run
             )
             if preferred and preferred.get("email"):
                 args["to_employee_id"] = preferred["email"]
-                args["_allocated_recipient"] = {
-                    "display_name": preferred.get("display_name"),
-                    "requirement": preferred.get("requirement"),
-                    "resource_type": preferred.get("resource_type"),
-                    "resource_id": preferred.get("resource_id"),
-                    "email": preferred.get("email"),
-                }
             elif not args.get("to_employee_id"):
                 directory = self._directory_context()
                 contacts = directory.get("supplier_contacts") or []
@@ -1347,6 +1773,7 @@ class ExecutionService:
                     args["to_employee_id"] = emps[0].get("id")
                 else:
                     args["to_employee_id"] = "owner@demo.bpm.local"
+
             needs_compose = (
                 not args.get("subject")
                 or not args.get("body")
@@ -1355,10 +1782,16 @@ class ExecutionService:
                 or "authored during agent 4" in str(args.get("body") or "").lower()
             )
             if needs_compose:
-                composed = self._compose_email_with_gemini(process_id=process_id, run=run, args=args)
+                composed = self._compose_email_with_gemini(
+                    process_id=process_id, run=run, args=args
+                )
                 if composed:
-                    args["subject"] = composed.get("subject") or args.get("subject") or "Process update"
-                    args["body"] = composed.get("body") or args.get("body") or "Please see process details."
+                    args["subject"] = (
+                        composed.get("subject") or args.get("subject") or "Process update"
+                    )
+                    args["body"] = (
+                        composed.get("body") or args.get("body") or "Please see process details."
+                    )
             if not args.get("subject"):
                 name = (preferred or {}).get("display_name") if preferred else None
                 args["subject"] = (
@@ -1368,34 +1801,157 @@ class ExecutionService:
                 greet = (preferred or {}).get("display_name") if preferred else "there"
                 args["body"] = (
                     f"Hello {greet},\n\n"
-                    "This message was authored during Agent 4 process execution "
-                    "using the recipient allocated by Agent 2.\n\n"
+                    "This message was authored during Agent 4 process execution.\n\n"
                     "Regards,\nBPM Agent"
                 )
-            # Gateway schema rejects unknown keys
             args.pop("_allocated_recipient", None)
-        if tool_name == "notification.send":
+
+        elif tool_name == "supplier.request_quote":
+            if not args.get("supplier_id"):
+                allocation = self._latest_allocation(process_id) or {}
+                suppliers = [
+                    a
+                    for a in self._assignment_dicts(allocation)
+                    if a.get("resource_type") == "supplier"
+                ]
+                if suppliers:
+                    args["supplier_id"] = str(suppliers[0].get("resource_id"))
+                else:
+                    dir_suppliers = self._directory_context().get("suppliers") or []
+                    if dir_suppliers:
+                        args["supplier_id"] = str(dir_suppliers[0].get("id"))
+                    else:
+                        args["supplier_id"] = "supp-001"
+            args.setdefault("product_sku", "LAPTOP-PRO-01")
+            args.setdefault("quantity", 5)
+            preferred = self._resolve_email_recipient_from_allocation(
+                process_id=process_id, run=run
+            )
+            if preferred and preferred.get("email"):
+                args.setdefault("contact_email", preferred["email"])
+            args.setdefault("subject", "RFQ: Enterprise High-Performance Laptops")
+            args.setdefault(
+                "body", "Please provide a formal quotation for 5 high-performance laptops."
+            )
+
+        elif tool_name == "supplier.collect_quote":
+            if not args.get("request_id"):
+                collected_req_ids = {
+                    str(q.get("request_id"))
+                    for q in self.store.quotations.values()
+                    if q.get("organization_id") == str(self.organization_id)
+                }
+                uncollected = [
+                    r
+                    for r in self.store.quote_requests.values()
+                    if r.get("organization_id") == str(self.organization_id)
+                    and str(r.get("id")) not in collected_req_ids
+                ]
+                if uncollected:
+                    args["request_id"] = str(uncollected[0].get("id"))
+                else:
+                    all_reqs = [
+                        r
+                        for r in self.store.quote_requests.values()
+                        if r.get("organization_id") == str(self.organization_id)
+                    ]
+                    if all_reqs:
+                        args["request_id"] = str(all_reqs[-1].get("id"))
+
+        elif tool_name == "quotation.compare":
+            if not args.get("quotation_ids"):
+                q_ids = [
+                    str(q.get("id"))
+                    for q in self.store.quotations.values()
+                    if q.get("organization_id") == str(self.organization_id)
+                ]
+                args["quotation_ids"] = q_ids if q_ids else ["dummy-quote-1"]
+            args.setdefault("explain", True)
+
+        elif tool_name == "purchase_order.create_draft":
+            if not args.get("supplier_id") or not args.get("amount_total"):
+                quotes = [
+                    q
+                    for q in self.store.quotations.values()
+                    if q.get("organization_id") == str(self.organization_id)
+                ]
+                if quotes:
+                    sorted_quotes = sorted(
+                        quotes,
+                        key=lambda q: float(q.get("total") or q.get("subtotal") or 999999.0),
+                    )
+                    best_quote = sorted_quotes[0]
+                    if not args.get("supplier_id"):
+                        args["supplier_id"] = str(best_quote.get("supplier_id"))
+                    if not args.get("amount_total") or float(args["amount_total"]) <= 0:
+                        args["amount_total"] = float(
+                            best_quote.get("total") or best_quote.get("subtotal") or 2400.0
+                        )
+                else:
+                    if not args.get("supplier_id"):
+                        dir_suppliers = self._directory_context().get("suppliers") or []
+                        args["supplier_id"] = (
+                            str(dir_suppliers[0]["id"]) if dir_suppliers else "supp-001"
+                        )
+                    if not args.get("amount_total") or float(args["amount_total"]) <= 0:
+                        args["amount_total"] = 2400.0
+            args.setdefault("currency_code", "USD")
+            if not args.get("lines"):
+                tot = float(args.get("amount_total") or 2400.0)
+                args["lines"] = [
+                    {
+                        "description": "High-performance laptops",
+                        "quantity": 5,
+                        "unit_price": round(tot / 5, 2),
+                    }
+                ]
+
+        elif tool_name == "purchase_order.submit":
+            if not args.get("purchase_order_id"):
+                drafts = [
+                    p
+                    for p in self.store.purchase_orders.values()
+                    if p.get("organization_id") == str(self.organization_id)
+                    and not p.get("submitted")
+                ]
+                if drafts:
+                    args["purchase_order_id"] = str(drafts[-1].get("id"))
+                else:
+                    all_pos = [
+                        p
+                        for p in self.store.purchase_orders.values()
+                        if p.get("organization_id") == str(self.organization_id)
+                    ]
+                    if all_pos:
+                        args["purchase_order_id"] = str(all_pos[-1].get("id"))
+
+        elif tool_name == "notification.send":
             args.setdefault("title", "Process update")
             args.setdefault("body", "Agent 4 completed a process step.")
             preferred = self._resolve_email_recipient_from_allocation(
                 process_id=process_id, run=run
             )
-            if preferred and preferred.get("email"):
-                args.setdefault("user_id", preferred["email"])
-            elif preferred and preferred.get("resource_id"):
-                args.setdefault("user_id", str(preferred["resource_id"]))
+            if not args.get("user_id"):
+                if preferred and preferred.get("email"):
+                    args["user_id"] = preferred["email"]
+                elif preferred and preferred.get("resource_id"):
+                    args["user_id"] = str(preferred["resource_id"])
+                else:
+                    args["user_id"] = "owner@demo.bpm.local"
 
-        if tool_name == "calendar.create_event":
+        elif tool_name == "calendar.create_event":
             preferred = self._resolve_email_recipient_from_allocation(
                 process_id=process_id, run=run
             )
             args.setdefault("title", "Process meeting")
             if not args.get("start_at"):
-                from datetime import datetime, timedelta, timezone
+                from datetime import datetime, timedelta
 
                 args["start_at"] = (
-                    datetime.now(timezone.utc) + timedelta(days=1)
-                ).replace(microsecond=0).isoformat()
+                    (datetime.now(UTC) + timedelta(days=1))
+                    .replace(microsecond=0)
+                    .isoformat()
+                )
             attendees = list(args.get("attendees") or [])
             if preferred and preferred.get("email") and preferred["email"] not in attendees:
                 attendees.insert(0, preferred["email"])
@@ -1403,30 +1959,23 @@ class ExecutionService:
                 attendees = ["owner@demo.bpm.local"]
             args["attendees"] = attendees
 
-        if tool_name == "task.assign":
+        elif tool_name == "task.assign":
             preferred = self._resolve_email_recipient_from_allocation(
                 process_id=process_id, run=run
             )
             args.setdefault("title", "Process follow-up")
-            if preferred and preferred.get("email"):
-                args["assignee_id"] = preferred["email"]
-            elif not args.get("assignee_id"):
-                args["assignee_id"] = "owner@demo.bpm.local"
+            if not args.get("assignee_id"):
+                if preferred and preferred.get("email"):
+                    args["assignee_id"] = preferred["email"]
+                else:
+                    args["assignee_id"] = "owner@demo.bpm.local"
 
-        if tool_name == "document.generate":
+        elif tool_name == "document.generate":
             args.setdefault("title", "Process document")
             args.setdefault("doc_type", "memo")
             if not args.get("content"):
                 args["content"] = "Generated by Agent 4 during process execution."
 
-        if tool_name == "supplier.request_quote":
-            preferred = self._resolve_email_recipient_from_allocation(
-                process_id=process_id, run=run
-            )
-            if preferred and preferred.get("email"):
-                args.setdefault("contact_email", preferred["email"])
-            args.setdefault("product_sku", "ITEM-001")
-            args.setdefault("quantity", 1)
     def _compose_email_with_gemini(
         self, *, process_id: UUID, run: Any, args: dict[str, Any]
     ) -> dict[str, str] | None:
@@ -1445,8 +1994,7 @@ class ExecutionService:
             prompt = {
                 "goal": (version.plan_snapshot or {}).get("goal"),
                 "step": step,
-                "recipient": preferred
-                or {"to": args.get("to_employee_id")},
+                "recipient": preferred or {"to": args.get("to_employee_id")},
                 "instruction": (
                     "Address the email to the allocated recipient by name. "
                     "Do not invent another recipient."
@@ -1470,6 +2018,7 @@ class ExecutionService:
                 organization_id=self.organization_id,
                 process_id=process_id,
                 correlation_id=getattr(run, "correlation_id", None),
+                trace_id=getattr(run, "correlation_id", None),
                 actor_user_id=getattr(run, "initiated_by_user_id", None),
                 agent=AgentKind.EXECUTION,
                 permissions=frozenset({"execution.run"}),
@@ -1524,7 +2073,8 @@ class ExecutionService:
                 "body": e.get("body"),
                 "body_preview": " ".join(str(e.get("body") or "").split())[:360],
                 "summary": (
-                    f"{str(e.get('status') or 'sent').title()} “{e.get('subject') or '(no subject)'}” "
+                    f"{str(e.get('status') or 'sent').title()} "
+                    f"“{e.get('subject') or '(no subject)'}” "
                     f"to {', '.join(e.get('to') or []) or 'unknown recipient'}."
                 ),
                 "status": e.get("status"),

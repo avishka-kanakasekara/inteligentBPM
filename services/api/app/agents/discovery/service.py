@@ -421,9 +421,11 @@ class DiscoveryService:
                     goal = msg.content
                     break
 
+        session = self.get_or_create_session(process_id, user_id=user_id)
+        effective_document_ids = list(document_ids or session.document_ids)
         doc_context, source_refs, _flags = self._document_context(
             query=goal,
-            document_ids=list(document_ids or []),
+            document_ids=effective_document_ids,
             user_id=user_id,
         )
         revision_note = ""
@@ -786,6 +788,9 @@ class DiscoveryService:
             version_id,
             confirmed_by_user_id=user_id,
         )
+        # Advance the process status so it becomes visible on Active Runs.
+        # Without this, the process stays "draft" forever after plan confirmation.
+        self.processes.set_status(process_id, "plan_ready")
         self._emit(
             process_id,
             {

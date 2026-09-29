@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+from typing import Any
 from uuid import UUID
 
 from app.contracts.common import utcnow
@@ -18,7 +20,7 @@ from app.database.memory import (
     SupplierRecord,
     get_memory_store,
 )
-from app.database.seed_demo import seed_demo_processes
+from app.database.seed_demo import seed_agent4_demo_process, seed_demo_processes
 
 DEFAULT_ORG_ID = UUID("76ec608f-37a4-45fa-bb58-fb81c0710720")
 DEFAULT_USER_ID = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
@@ -42,6 +44,7 @@ EMP_IT_MGR = UUID("a76ec608-e001-4000-8000-000000000005")
 EMP_ANALYST = UUID("a76ec608-e001-4000-8000-000000000006")
 EMP_COMPLIANCE = UUID("a76ec608-e001-4000-8000-000000000007")
 EMP_OPS = UUID("a76ec608-e001-4000-8000-000000000008")
+EMP_AVISHKA = UUID("a76ec608-e001-4000-8000-000000000099")
 
 SUP_NORTHWIND = UUID("a76ec608-a001-4000-8000-000000000001")
 SUP_CONTOSO = UUID("a76ec608-a001-4000-8000-000000000002")
@@ -57,7 +60,7 @@ BUD_PROC = UUID("a76ec608-b001-4000-8000-000000000001")
 BUD_IT = UUID("a76ec608-b001-4000-8000-000000000002")
 
 
-def _put(mapping: dict, record_id: UUID, record: object) -> None:
+def _put(mapping: dict[UUID, Any], record_id: UUID, record: Any) -> None:
     mapping[record_id] = record
 
 
@@ -65,10 +68,30 @@ def _ensure_kanaka_supplier(
     store: MemoryStore,
     *,
     organization_id: UUID,
-    now=None,
+    now: datetime | None = None,
 ) -> None:
-    """Ensure live-email demo supplier Kanaka exists (safe to call repeatedly)."""
+    """Ensure live-email demo supplier Kanaka and Avishka exist (safe to call repeatedly)."""
     now = now or utcnow()
+    if EMP_AVISHKA not in store.employees:
+        _put(
+            store.employees,
+            EMP_AVISHKA,
+            EmployeeRecord(
+                id=EMP_AVISHKA,
+                organization_id=organization_id,
+                full_name="Avishka Kanakasekara",
+                email="kadavishkakanakasekara@gmail.com",
+                title="Procurement & IT Lead",
+                department_id=DEPT_IT,
+                is_manager=True,
+                status="active",
+                created_at=now,
+                updated_at=now,
+                employee_code="E-099",
+                role_code="manager",
+                approval_authority_limit=50000.0,
+            ),
+        )
     if SUP_KANAKA not in store.suppliers:
         _put(
             store.suppliers,
@@ -119,9 +142,10 @@ def seed_sample_company(
 
     # Idempotent: if company directory already present, still ensure Kanaka demo supplier
     if EMP_OWNER in store.employees and SUP_NORTHWIND in store.suppliers:
-        _ensure_kanaka_supplier(store, organization_id=organization_id, now=now)
         if include_process:
+            _ensure_kanaka_supplier(store, organization_id=organization_id, now=now)
             seed_demo_processes(store, organization_id=organization_id, user_id=user_id)
+            seed_agent4_demo_process(store, organization_id=organization_id, user_id=user_id)
         return
 
     org = store.organizations.get(organization_id)
@@ -221,6 +245,21 @@ def seed_sample_company(
         _put(store.cost_centers, cc.id, cc)
 
     employees = [
+        EmployeeRecord(
+            id=EMP_AVISHKA,
+            organization_id=organization_id,
+            full_name="Avishka Kanakasekara",
+            email="kadavishkakanakasekara@gmail.com",
+            title="Procurement & IT Lead",
+            department_id=DEPT_IT,
+            is_manager=True,
+            status="active",
+            created_at=now,
+            updated_at=now,
+            employee_code="E-099",
+            role_code="manager",
+            approval_authority_limit=50000.0,
+        ),
         EmployeeRecord(
             id=EMP_OWNER,
             organization_id=organization_id,
@@ -590,7 +629,9 @@ def seed_sample_company(
             created_at=now,
             updated_at=now,
             category="security",
-            description="New IT vendors require a completed security questionnaire before approval.",
+            description=(
+                "New IT vendors require a completed security questionnaire before approval."
+            ),
             owner_employee_id=EMP_COMPLIANCE,
         ),
     ):
@@ -628,3 +669,4 @@ def seed_sample_company(
 
     if include_process:
         seed_demo_processes(store, organization_id=organization_id, user_id=user_id)
+        seed_agent4_demo_process(store, organization_id=organization_id, user_id=user_id)

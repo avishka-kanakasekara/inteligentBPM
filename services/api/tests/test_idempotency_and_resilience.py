@@ -3,16 +3,17 @@
 from __future__ import annotations
 
 import time
-from uuid import UUID, uuid4
+from uuid import uuid4
+
 import pytest
 from fastapi.testclient import TestClient
 
 from app.llm.failures import LLMError
+from app.llm.model_registry import ModelRegistry
 from app.llm.retry import CircuitBreaker, LLMRetryPolicy
 from app.llm.types import AgentKind, LLMFailureKind
-from app.llm.model_registry import ModelRegistry
-from app.services.idempotency import IdempotencyService
 from app.security.errors import ConflictError
+from app.services.idempotency import IdempotencyService
 
 
 def test_idempotency_service_replay_and_conflict() -> None:

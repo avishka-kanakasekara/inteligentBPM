@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from uuid import uuid4
+
 import pytest
 
 from app.database.memory import (
-    reset_memory_store,
     get_memory_store,
+    reset_memory_store,
 )
 from app.domain.enums import (
     ApprovalStatus,
@@ -185,8 +186,8 @@ def test_approval_repository_decision_lifecycle() -> None:
     user_id = uuid4()
 
     store = get_memory_store()
-    from app.database.memory import ApprovalRecord, new_id
     from app.contracts.common import utcnow
+    from app.database.memory import ApprovalRecord, new_id
 
     app_id = new_id()
     now = utcnow()

@@ -12,7 +12,7 @@ from uuid import UUID
 
 from app.config import get_settings
 from app.integrations.email import MockEmailProvider
-from app.integrations.errors import ProviderError
+from app.integrations.errors import InvalidRecipientError, ProviderError
 from app.integrations.factory import build_providers
 from app.integrations.live_tools import (
     LiveCalendarAdapter,
@@ -32,22 +32,63 @@ ProviderFailure = ProviderError
 
 
 def _resolve_recipient_email(organization_id: UUID, to_employee_id: str) -> str:
-    """Accept employee UUID, supplier contact UUID, or raw email address."""
+    """Accept employee UUID, supplier contact UUID, display name, or raw email address.
+
+    Resolution order:
+      1. Raw email address (contains @)
+      2. Employee by UUID
+      3. Supplier contact by UUID
+      4. Employee by display name (case-insensitive substring match)
+      5. Supplier contact by display name
+    Raises InvalidRecipientError if no match found.
+    """
     raw = (to_employee_id or "").strip()
+    if not raw:
+        raise InvalidRecipientError("Recipient is empty", recipients=[])
+
+    # 1. Raw email
     if "@" in raw:
         return raw
+
+    # 2. Employee by UUID
     try:
         emp = EmployeeRepository(organization_id).get(UUID(raw))
-        return emp.email
+        if emp.email:
+            return emp.email
     except Exception:
         pass
+
+    # 3. Supplier contact by UUID
     try:
         for contact in SupplierContactRepository(organization_id).list_all():
             if str(contact.id) == raw and contact.email:
                 return contact.email
     except Exception:
         pass
-    return f"{raw}@employees.local"
+
+    # 4. Employee by name (case-insensitive)
+    raw_lower = raw.lower()
+    try:
+        for emp in EmployeeRepository(organization_id).list_all():
+            if emp.organization_id == organization_id and raw_lower in emp.full_name.lower():
+                if emp.email:
+                    return emp.email
+    except Exception:
+        pass
+
+    # 5. Supplier contact by name
+    try:
+        for contact in SupplierContactRepository(organization_id).list_all():
+            if raw_lower in (contact.full_name or "").lower() and contact.email:
+                return contact.email
+    except Exception:
+        pass
+
+    raise InvalidRecipientError(
+        f"Could not resolve recipient '{raw}' to an email address. "
+        "Pass a valid email address, employee UUID, or employee display name.",
+        recipients=[raw],
+    )
 
 
 class EmailAdapter:

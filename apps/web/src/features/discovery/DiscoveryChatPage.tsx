@@ -1,15 +1,24 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { LoadingState } from "../../components/ui/LoadingState";
 import { RequireFeature } from "../../components/RouteGuards";
-import { apiClient } from "../../lib/apiClient";
+import { ApiError, apiClient } from "../../lib/apiClient";
 import { useOrganization } from "../../providers/OrganizationProvider";
+
+const ACCEPTED_EXTENSIONS = [".pdf", ".docx", ".xlsx", ".csv", ".txt", ".md", ".markdown", ".eml", ".msg"];
+const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+
+type AttachedDocument = {
+  id: string;
+  name: string;
+};
 
 type ChatMessage = {
   id?: string;
   role: "user" | "assistant";
   content: string;
+  document_ids?: string[];
   clarifying_questions?: string[];
   missing_information?: Array<{ field?: string; question: string }>;
   intent?: {
@@ -18,6 +27,19 @@ type ChatMessage = {
     systems?: string[];
   };
 };
+
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result || "");
+      const comma = result.indexOf(",");
+      resolve(comma >= 0 ? result.slice(comma + 1) : result);
+    };
+    reader.onerror = () => reject(reader.error ?? new Error("Could not read file"));
+    reader.readAsDataURL(file);
+  });
+}
 
 type PlanStep = {
   step_id: string;
@@ -49,9 +71,13 @@ export function DiscoveryChatPage() {
   const [showNewModal, setShowNewModal] = useState(false);
   const [inputMessage, setInputMessage] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [pendingDocs, setPendingDocs] = useState<AttachedDocument[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const [draftedPlan, setDraftedPlan] = useState<DraftedPlan | null>(null);
   const [planConfirmed, setPlanConfirmed] = useState(false);
   const [actionNotice, setActionNotice] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Load process summaries
   const processesQuery = useQuery({
@@ -61,6 +87,29 @@ export function DiscoveryChatPage() {
   });
 
   const processes = processesQuery.data ?? [];
+
+  const documentsQuery = useQuery({
+    queryKey: ["documents", activeOrganization?.id],
+    queryFn: () => apiClient.listDocuments(),
+    enabled: Boolean(activeOrganization?.id),
+  });
+
+  const documentNames = useMemo(() => {
+    const names = new Map<string, string>();
+    for (const doc of documentsQuery.data?.items ?? []) {
+      names.set(doc.id, doc.file_name || doc.title);
+    }
+    for (const doc of pendingDocs) names.set(doc.id, doc.name);
+    return names;
+  }, [documentsQuery.data, pendingDocs]);
+
+  const sessionDocumentIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const message of messages) {
+      for (const id of message.document_ids ?? []) ids.add(id);
+    }
+    return Array.from(ids);
+  }, [messages]);
 
   // Auto-select first process if none selected
   useEffect(() => {
@@ -85,6 +134,7 @@ export function DiscoveryChatPage() {
         id: m.id,
         role: m.role,
         content: m.content,
+        document_ids: Array.isArray(m.document_ids) ? m.document_ids : [],
         clarifying_questions: m.clarifying_questions,
         intent: m.intent,
       }));
@@ -112,14 +162,22 @@ export function DiscoveryChatPage() {
       setNewProcessDesc("");
       setDraftedPlan(null);
       setPlanConfirmed(false);
+      setPendingDocs([]);
       setActionNotice(`Created process: "${created.name}"`);
     },
   });
 
   // Chat message mutation
   const sendChatMutation = useMutation({
-    mutationFn: ({ procId, text }: { procId: string; text: string }) =>
-      apiClient.chatDiscovery(procId, text),
+    mutationFn: ({
+      procId,
+      text,
+      documentIds,
+    }: {
+      procId: string;
+      text: string;
+      documentIds: string[];
+    }) => apiClient.chatDiscovery(procId, text, documentIds),
     onSuccess: (reply) => {
       setMessages((prev) => [
         ...prev,
@@ -137,7 +195,8 @@ export function DiscoveryChatPage() {
 
   // Draft plan mutation (Vertex Gemini)
   const draftPlanMutation = useMutation({
-    mutationFn: (procId: string) => apiClient.draftPlan(procId),
+    mutationFn: ({ procId, documentIds }: { procId: string; documentIds: string[] }) =>
+      apiClient.draftPlan(procId, { document_ids: documentIds }),
     onSuccess: (res) => {
       setDraftedPlan(res);
       setPlanConfirmed(res.status === "confirmed");
@@ -158,14 +217,66 @@ export function DiscoveryChatPage() {
     },
   });
 
+  async function handleFilesSelected(fileList: FileList | null) {
+    if (!fileList || !selectedProcessId) return;
+    setUploadError(null);
+    const files = Array.from(fileList);
+    setUploading(true);
+    try {
+      const uploaded: AttachedDocument[] = [];
+      for (const file of files) {
+        const ext = file.name.includes(".")
+          ? file.name.slice(file.name.lastIndexOf(".")).toLowerCase()
+          : "";
+        if (!ACCEPTED_EXTENSIONS.includes(ext)) {
+          throw new Error(`${file.name} is not a supported type (${ACCEPTED_EXTENSIONS.join(", ")})`);
+        }
+        if (file.size > MAX_UPLOAD_BYTES) {
+          throw new Error(`${file.name} is larger than 25 MB`);
+        }
+        const content_base64 = await fileToBase64(file);
+        const created = await apiClient.ingestDocument({
+          title: file.name,
+          file_name: file.name,
+          content_base64,
+          mime_type: file.type || undefined,
+          document_type: "discovery",
+        });
+        uploaded.push({ id: created.id, name: created.file_name || created.title || file.name });
+      }
+      setPendingDocs((prev) => {
+        const seen = new Set(prev.map((doc) => doc.id));
+        return [...prev, ...uploaded.filter((doc) => !seen.has(doc.id))];
+      });
+      void queryClient.invalidateQueries({ queryKey: ["documents"] });
+    } catch (err) {
+      const message =
+        err instanceof ApiError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : "Upload failed";
+      setUploadError(message);
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }
+
   const handleSendMessage = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!inputMessage.trim() || !selectedProcessId || sendChatMutation.isPending) return;
-
+    if (!selectedProcessId || sendChatMutation.isPending || uploading) return;
     const userText = inputMessage.trim();
+    if (!userText && pendingDocs.length === 0) return;
+
+    const documentIds = pendingDocs.map((doc) => doc.id);
+    const content =
+      userText ||
+      `Please use these attached documents as source material: ${pendingDocs.map((doc) => doc.name).join(", ")}`;
     setInputMessage("");
-    setMessages((prev) => [...prev, { role: "user", content: userText }]);
-    sendChatMutation.mutate({ procId: selectedProcessId, text: userText });
+    setPendingDocs([]);
+    setMessages((prev) => [...prev, { role: "user", content, document_ids: documentIds }]);
+    sendChatMutation.mutate({ procId: selectedProcessId, text: content, documentIds });
   };
 
   const handleApplyQuestion = (question: string) => {
@@ -209,6 +320,8 @@ export function DiscoveryChatPage() {
                   setSelectedProcessId(e.target.value);
                   setDraftedPlan(null);
                   setPlanConfirmed(false);
+                  setPendingDocs([]);
+                  setUploadError(null);
                 }}
                 style={{ flex: 1, maxWidth: "400px" }}
               >
@@ -225,7 +338,12 @@ export function DiscoveryChatPage() {
             <button
               type="button"
               className="btn-secondary"
-              onClick={() => draftPlanMutation.mutate(selectedProcessId)}
+              onClick={() =>
+                draftPlanMutation.mutate({
+                  procId: selectedProcessId,
+                  documentIds: Array.from(new Set([...sessionDocumentIds, ...pendingDocs.map((d) => d.id)])),
+                })
+              }
               disabled={draftPlanMutation.isPending}
             >
               {draftPlanMutation.isPending ? "Drafting plan…" : "Draft plan"}
@@ -315,6 +433,15 @@ export function DiscoveryChatPage() {
                       {m.role === "user" ? "You" : "Discovery assistant"}
                     </div>
                     <div style={{ whiteSpace: "pre-wrap", lineHeight: 1.45 }}>{m.content}</div>
+                    {m.document_ids && m.document_ids.length > 0 ? (
+                      <div className="chat-attachments">
+                        {m.document_ids.map((id) => (
+                          <span key={id} className="chat-chip">
+                            <span>{documentNames.get(id) || "Attached document"}</span>
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
 
                     {/* Clarifying questions suggestions */}
                     {m.clarifying_questions && m.clarifying_questions.length > 0 && (
@@ -357,24 +484,74 @@ export function DiscoveryChatPage() {
             </div>
 
             <form className="chat-composer" onSubmit={handleSendMessage}>
-              <input
-                type="text"
-                placeholder={
-                  selectedProcessId
-                    ? "Describe business process, steps, required approvals…"
-                    : "Select or create a process first…"
-                }
-                disabled={!selectedProcessId || sendChatMutation.isPending}
-                value={inputMessage}
-                onChange={(e) => setInputMessage(e.target.value)}
-                aria-label="Discovery message"
-              />
-              <button
-                type="submit"
-                disabled={!selectedProcessId || !inputMessage.trim() || sendChatMutation.isPending}
-              >
-                Send
-              </button>
+              <div className="chat-upload">
+                <input
+                  ref={fileInputRef}
+                  id="discovery-document-upload"
+                  type="file"
+                  multiple
+                  accept={ACCEPTED_EXTENSIONS.join(",")}
+                  disabled={!selectedProcessId || uploading || sendChatMutation.isPending}
+                  onChange={(e) => void handleFilesSelected(e.target.files)}
+                />
+                <div>
+                  <strong>Upload documents</strong>
+                  <p>PDF, Word, Excel, CSV, text, Markdown, or email. Up to 25 MB each.</p>
+                </div>
+              </div>
+              {pendingDocs.length > 0 ? (
+                <div className="chat-attachments" aria-label="Documents to send">
+                  {pendingDocs.map((doc) => (
+                    <span key={doc.id} className="chat-chip">
+                      <span>{doc.name}</span>
+                      <button
+                        type="button"
+                        aria-label={`Remove ${doc.name}`}
+                        onClick={() =>
+                          setPendingDocs((prev) => prev.filter((item) => item.id !== doc.id))
+                        }
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              ) : null}
+              {uploading ? (
+                <p className="chat-upload-status" role="status">
+                  Uploading documents…
+                </p>
+              ) : null}
+              {uploadError ? (
+                <p className="chat-upload-error" role="alert">
+                  {uploadError}
+                </p>
+              ) : null}
+              <div className="chat-composer-row">
+                <input
+                  type="text"
+                  placeholder={
+                    selectedProcessId
+                      ? "Describe the process, or send the uploaded documents…"
+                      : "Select or create a process first…"
+                  }
+                  disabled={!selectedProcessId || sendChatMutation.isPending || uploading}
+                  value={inputMessage}
+                  onChange={(e) => setInputMessage(e.target.value)}
+                  aria-label="Discovery message"
+                />
+                <button
+                  type="submit"
+                  disabled={
+                    !selectedProcessId ||
+                    uploading ||
+                    sendChatMutation.isPending ||
+                    (!inputMessage.trim() && pendingDocs.length === 0)
+                  }
+                >
+                  Send
+                </button>
+              </div>
             </form>
           </div>
 

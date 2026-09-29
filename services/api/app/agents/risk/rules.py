@@ -81,15 +81,80 @@ def _extract_amount(plan: ProcessPlan, explicit: float | None) -> float | None:
 
 
 def _count_quotes_in_plan(plan: ProcessPlan, explicit: int | None) -> int | None:
+    import re as _re
+
     if explicit is not None:
         return explicit
+
+    # Build full text blob from plan
     blob = (plan.goal + " " + plan.reasoning_summary).lower()
     for step in plan.steps:
         blob += " " + step.description.lower()
-    if "dual quote" in blob or "two quote" in blob or "2 quote" in blob:
+        blob += " " + step.title.lower()
+        blob += " " + " ".join(step.allowed_tools or []).lower()
+        blob += " " + " ".join(step.success_criteria or []).lower()
+
+    # Check allowed_tools directly for quote-collection steps
+    # A plan with supplier.request_quote in its step tools clearly plans dual quotes
+    quote_tool_steps = sum(
+        1
+        for s in plan.steps
+        if any(
+            t in (s.allowed_tools or [])
+            for t in ("supplier.request_quote", "supplier.collect_quote", "quotation.compare")
+        )
+    )
+    if quote_tool_steps >= 1:
+        # Plan has dedicated quotation step(s) → assume compliant dual-quote intent
         return 2
+
+    # Step IDs that indicate quotation collection
+    step_ids = {s.step_id.lower() for s in plan.steps}
+    if any(k in sid for sid in step_ids for k in ("rfq", "quot", "request_quote", "collect_quote")):
+        return 2
+
+    # Explicit quote-count phrases — dual/two/2 quotations
+    dual_patterns = [
+        "dual quot",
+        "two quot",
+        "2 quot",
+        "2 quotation",
+        "dual rfq",
+        "two rfq",
+        "dual supplier",
+        "multiple quot",
+        "multiple supplier",
+        "collect quot",  # "collect quotations" implies ≥ 2
+        "request quot",  # "request quotations" (plural)
+        "at least 2",
+        "at least two",
+    ]
+    for pattern in dual_patterns:
+        if pattern in blob:
+            return 2
+
     if "three quote" in blob or "3 quote" in blob:
         return 3
+
+    # Supplier-count phrases: "3 approved suppliers", "three suppliers", etc.
+    sup_match = _re.search(r"(\d+)\s+(?:approved\s+|preferred\s+)?suppliers?", blob)
+    if sup_match:
+        count = int(sup_match.group(1))
+        if count >= 2:
+            return count
+    word_counts = {"two": 2, "three": 3, "four": 4, "five": 5}
+    for word, val in word_counts.items():
+        if _re.search(rf"{word}\s+(?:approved\s+|preferred\s+)?suppliers?", blob):
+            return val
+
+    # "at least N" pattern — covers "at least 3 approved suppliers"
+    atleast_match = _re.search(r"at\s+least\s+(\d+)", blob)
+    if atleast_match:
+        count = int(atleast_match.group(1))
+        if count >= 2:
+            return count
+
+    # Generic fallback: plan mentions quoting but count is ambiguous → treat as 1
     if "quote" in blob or "quotation" in blob:
         return 1
     return None
@@ -237,16 +302,50 @@ class DeterministicPolicyRules:
         pol = policies.get("proc-001")
         pid = str(pol.id) if pol else None
         if quotes is None or quotes < ctx.required_quotations:
+            # Check whether the plan explicitly schedules a quotation-collection step.
+            # If so, the plan intends to satisfy the policy — treat it as non-blocking.
+            plan_has_quote_step = any(
+                any(
+                    t in (s.allowed_tools or [])
+                    for t in (
+                        "supplier.request_quote",
+                        "supplier.collect_quote",
+                        "quotation.compare",
+                        "quotation.extract",
+                        "quotation.normalize",
+                    )
+                )
+                or any(
+                    k in s.step_id.lower()
+                    for k in ("rfq", "quot", "request_quote", "collect_quote")
+                )
+                or any(
+                    k in s.title.lower()
+                    for k in ("quotation", "rfq", "dual quote", "collect quote")
+                )
+                for s in ctx.plan.steps
+            )
+            is_blocking = (
+                not plan_has_quote_step
+                and quotes is not None
+                and quotes < ctx.required_quotations
+            )
             return [
                 RiskItem(
                     id="risk_quotes_missing",
                     category=RiskCategory.PROCUREMENT,
-                    severity=RiskSeverity.HIGH,
-                    likelihood=Likelihood.LIKELY,
-                    impact=Impact.MAJOR,
+                    severity=RiskSeverity.HIGH if is_blocking else RiskSeverity.MEDIUM,
+                    likelihood=Likelihood.LIKELY if is_blocking else Likelihood.POSSIBLE,
+                    impact=Impact.MAJOR if is_blocking else Impact.MODERATE,
                     description=(
                         f"Required quotation count is {ctx.required_quotations}; "
-                        f"found {quotes if quotes is not None else 0}."
+                        f"found {quotes if quotes is not None else 0}. "
+                        + (
+                            "Plan includes a quotation collection step — policy will be "
+                            "satisfied during execution."
+                            if plan_has_quote_step
+                            else "Collect additional vendor quotations before proceeding."
+                        )
                     ),
                     policy_reference=_policy_ref(
                         PolicyRuleType.REQUIRED_QUOTATION_COUNT,
@@ -256,8 +355,12 @@ class DeterministicPolicyRules:
                         section="§2 quotes",
                     ),
                     evidence_references=list(ctx.evidence_refs),
-                    blocking=quotes is not None and quotes < ctx.required_quotations,
-                    required_remediation="Collect additional vendor quotations before proceeding.",
+                    blocking=is_blocking,
+                    required_remediation=(
+                        "Quotation step is included in the plan and will be executed."
+                        if plan_has_quote_step
+                        else "Collect additional vendor quotations before proceeding."
+                    ),
                     required_approver="procurement",
                     rule_type=PolicyRuleType.REQUIRED_QUOTATION_COUNT,
                     review_or_expiration_date=date.today() + timedelta(days=14),

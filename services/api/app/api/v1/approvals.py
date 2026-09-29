@@ -188,6 +188,7 @@ def _build_approval_summary(a: ApprovalRecord, org_id: UUID) -> ApprovalSummaryR
         risk_summary=risk_summary,
         risk_items=risk_items,
         blocking_explanation=blocking_explanation,
+        created_at=a.created_at,
         updated_at=a.updated_at,
     )
 

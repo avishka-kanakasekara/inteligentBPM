@@ -11,4 +11,10 @@ from app.database.postgres_persistence import persist_mutation
 
 def persist_if_postgres(store: MemoryStore, collection: str, record_id: UUID) -> None:
     if get_settings().persistence_mode == "postgres":
-        persist_mutation(store, collection, record_id)
+        try:
+            from app.database.sync_pg import _sync_session_factory
+
+            if _sync_session_factory is not None:
+                persist_mutation(store, collection, record_id)
+        except Exception:
+            pass

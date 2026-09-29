@@ -328,7 +328,10 @@ class ToolGateway:
         run = store.process_runs.get(context.process_run_id)
         if run is None or run.organization_id != context.organization_id:
             raise ToolGatewayError(
-                ToolError(code=ToolErrorCode.TENANT_MISMATCH, message="Process run not found for tenant")
+                ToolError(
+                    code=ToolErrorCode.TENANT_MISMATCH,
+                    message="Process run not found for tenant",
+                )
             )
         if run.process_id != context.process_id:
             raise ToolGatewayError(
@@ -439,7 +442,10 @@ class ToolGateway:
         req = tool.approval_requirement
         if req is None or req.approval_type == ApprovalType.NONE:
             return
-        if req.approval_type == ApprovalType.POLICY and tool.side_effect_status == SideEffectStatus.DRAFT:
+        if (
+            req.approval_type == ApprovalType.POLICY
+            and tool.side_effect_status == SideEffectStatus.DRAFT
+        ):
             # Allowed according to policy when run is approved/executing or dry-run
             if context.dry_run:
                 return
@@ -540,7 +546,7 @@ class ToolGateway:
             key = UUID(str(rid))
         except Exception:
             return
-        collections: list[dict] = []
+        collections: list[dict[Any, Any]] = []
         if tool_name == "notification.send":
             collections.append(store.notifications)
         elif tool_name == "calendar.create_event":
@@ -549,6 +555,12 @@ class ToolGateway:
             collections.append(getattr(store, "tasks", {}) or {})
         elif tool_name == "document.generate":
             collections.append(getattr(store, "generated_documents", {}) or {})
+        elif tool_name == "supplier.request_quote":
+            collections.append(store.quote_requests)
+        elif tool_name == "supplier.collect_quote":
+            collections.append(store.quotations)
+        elif tool_name in {"purchase_order.create_draft", "purchase_order.submit"}:
+            collections.append(store.purchase_orders)
         for collection in collections:
             record = collection.get(key)
             if isinstance(record, dict):
@@ -662,7 +674,7 @@ class ToolGateway:
             return {"policies": hits, "mock": False}
 
         if tool_name == "document.search":
-            hits = DocumentSearchService(org).search(
+            doc_hits = DocumentSearchService(org).search(
                 query=args.query,
                 limit=args.limit,
                 can_read_restricted=True,
@@ -676,7 +688,7 @@ class ToolGateway:
                         "score": h.score,
                         "untrusted": True,
                     }
-                    for h in hits
+                    for h in doc_hits
                 ],
                 "mock": False,
                 "untrusted": True,
@@ -702,9 +714,34 @@ class ToolGateway:
             )
 
         if tool_name == "supplier.request_quote":
+            raw_sid = args.supplier_id
+            # Resolve supplier_id: accept UUID or supplier name/code
+            try:
+                UUID(raw_sid)  # validate it's already a UUID
+                resolved_sid = raw_sid
+            except (ValueError, AttributeError):
+                # Try name/code lookup
+                name_lower = (raw_sid or "").lower()
+                match = next(
+                    (
+                        s for s in SupplierRepository(org).list_all()
+                        if name_lower in s.name.lower()
+                        or (s.code and name_lower in s.code.lower())
+                    ),
+                    None,
+                )
+                if match is None:
+                    raise ToolGatewayError(
+                        ToolError(
+                            code=ToolErrorCode.VALIDATION_ERROR,
+                            message=f"No supplier found matching '{raw_sid}'. "
+                            "Use supplier.search to find the correct supplier_id first.",
+                        )
+                    ) from None
+                resolved_sid = str(match.id)
             kwargs = {
                 "organization_id": org,
-                "supplier_id": args.supplier_id,
+                "supplier_id": resolved_sid,
                 "product_sku": args.product_sku,
                 "quantity": args.quantity,
                 "idempotency_key": args.idempotency_key,
@@ -752,9 +789,34 @@ class ToolGateway:
             return comparison.model_dump(mode="json")
 
         if tool_name == "purchase_order.create_draft":
+            raw_sid = str(args.supplier_id or "").strip()
+            try:
+                UUID(raw_sid)
+                resolved_sid = raw_sid
+            except (ValueError, AttributeError):
+                name_lower = raw_sid.lower()
+                match = next(
+                    (
+                        s
+                        for s in SupplierRepository(org).list_all()
+                        if name_lower in s.name.lower()
+                        or (s.code and name_lower in s.code.lower())
+                    ),
+                    None,
+                )
+                if match is None:
+                    raise ToolGatewayError(
+                        ToolError(
+                            code=ToolErrorCode.VALIDATION_ERROR,
+                            message=f"No supplier found matching '{raw_sid}'. "
+                            "Use supplier.search to find the correct supplier_id first.",
+                        )
+                    ) from None
+                resolved_sid = str(match.id)
+
             return self.purchasing.create_draft(
                 organization_id=org,
-                supplier_id=args.supplier_id,
+                supplier_id=resolved_sid,
                 amount_total=args.amount_total,
                 currency_code=args.currency_code,
                 lines=args.lines,
