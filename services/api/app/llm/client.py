@@ -109,15 +109,12 @@ class VertexGeminiClient:
         self.classifier = LLMFailureClassifier()
         self._client: Any | None = None
 
+    def _use_developer_api(self) -> bool:
+        return self.settings.uses_gemini_api_key()
+
     def _get_client(self) -> Any:
         if self._client is not None:
             return self._client
-        if not self.settings.google_cloud_project:
-            raise LLMError(
-                "GOOGLE_CLOUD_PROJECT is required for VertexGeminiClient",
-                kind=LLMFailureKind.MODEL_UNAVAILABLE,
-                retryable=False,
-            )
         try:
             from google import genai
             from google.genai import types
@@ -127,6 +124,32 @@ class VertexGeminiClient:
                 kind=LLMFailureKind.PERMANENT,
                 retryable=False,
             ) from exc
+
+        http_options = types.HttpOptions(
+            timeout=int(self.settings.gemini_timeout_seconds * 1000)
+        )
+
+        if self._use_developer_api():
+            api_key = self.settings.google_api_key
+            if not api_key:
+                raise LLMError(
+                    "GOOGLE_API_KEY is required when Vertex AI is disabled",
+                    kind=LLMFailureKind.MODEL_UNAVAILABLE,
+                    retryable=False,
+                )
+            self._client = genai.Client(
+                api_key=api_key,
+                vertexai=False,
+                http_options=http_options,
+            )
+            return self._client
+
+        if not self.settings.google_cloud_project:
+            raise LLMError(
+                "GOOGLE_CLOUD_PROJECT is required for VertexGeminiClient",
+                kind=LLMFailureKind.MODEL_UNAVAILABLE,
+                retryable=False,
+            )
 
         if self.settings.google_application_credentials:
             raw_path = Path(self.settings.google_application_credentials)
@@ -147,9 +170,6 @@ class VertexGeminiClient:
             if resolved_cred:
                 os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(resolved_cred)
 
-        http_options = types.HttpOptions(
-            timeout=int(self.settings.gemini_timeout_seconds * 1000)
-        )
         self._client = genai.Client(
             vertexai=bool(self.settings.google_genai_use_vertexai),
             project=self.settings.google_cloud_project,
@@ -181,14 +201,18 @@ class VertexGeminiClient:
                 types.SafetySetting(category=s["category"], threshold=s["threshold"])
                 for s in self.safety.to_sdk_dicts()
             ],
-            "labels": request.labels or None,
         }
+        if request.labels and not self._use_developer_api():
+            config_kwargs["labels"] = request.labels
         if request.system_instruction:
             config_kwargs["system_instruction"] = request.system_instruction
         if request.response_mime_type:
             config_kwargs["response_mime_type"] = request.response_mime_type
         if request.response_schema is not None:
-            config_kwargs["response_schema"] = request.response_schema
+            schema = request.response_schema
+            if self._use_developer_api():
+                schema = _sanitize_schema_for_developer_api(schema)
+            config_kwargs["response_schema"] = schema
         if request.tools:
             config_kwargs["tools"] = self._to_tools(request.tools, types)
         if request.timeout_seconds is not None:
@@ -322,6 +346,19 @@ class VertexGeminiClient:
             blocked=False,
             raw={},
         )
+
+
+def _sanitize_schema_for_developer_api(schema: Any) -> Any:
+    """Gemini Developer API rejects additionalProperties; Vertex Enterprise accepts it."""
+    if isinstance(schema, dict):
+        return {
+            key: _sanitize_schema_for_developer_api(value)
+            for key, value in schema.items()
+            if key != "additionalProperties"
+        }
+    if isinstance(schema, list):
+        return [_sanitize_schema_for_developer_api(item) for item in schema]
+    return schema
 
 
 def create_gemini_client(

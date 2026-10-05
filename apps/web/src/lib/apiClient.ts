@@ -455,7 +455,11 @@ export const apiClient = {
   },
   analyzeRisk(
     processId: string,
-    options?: { process_version_id?: string; spending_amount?: number },
+    options?: {
+      process_version_id?: string;
+      spending_amount?: number;
+      quotation_count?: number;
+    },
   ): Promise<any> {
     return request(`/processes/${processId}/analyze-risk`, (res) => res, {
       method: "POST",
