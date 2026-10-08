@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
 
 from app.agents.allocation.matcher import DeterministicResourceMatcher, OrgCatalog
 from app.agents.allocation.models import ResourceType
+from app.agents.allocation.service import AllocationService
 from app.agents.discovery.models import ActionType, ProcessPlan, ProcessStep, RiskLevel
 from app.database.memory import get_memory_store
+from app.llm.client import FakeGeminiClient
 from app.repositories.memory_repos import (
     BudgetRepository,
     CostCenterRepository,
@@ -917,3 +919,308 @@ def test_employee_below_max_with_availability_stays_eligible(
     assert body["assignments"][0]["resource_id"] == str(employee.id)
     assert float(employee.availability_percent) > 0
     assert float(employee.current_workload_percent) < float(employee.max_allocation_percent)
+
+
+def _queue_allocation(
+    org_id: UUID,
+    user_id: UUID,
+    requirement: str,
+    proposals: list[dict[str, str]] | None,
+):
+    import os
+
+    from app.config import reset_settings_cache
+
+    process_id, _ = _seed_process_version(org_id, _plan_with_resources(requirement))
+    fake = FakeGeminiClient()
+    if proposals is not None:
+        fake.enqueue_structured(
+            {"proposed_assignments": proposals, "reasoning_summary": "queued test proposal"}
+        )
+    previous = os.environ.get("GEMINI_RESOURCE_MODEL")
+    os.environ["GEMINI_RESOURCE_MODEL"] = "gemini-2.0-flash-001"
+    reset_settings_cache()
+    try:
+        service = AllocationService(org_id, client=fake)
+        return service.allocate(
+            process_id,
+            user_id=user_id,
+            correlation_id="llm-gate",
+            permissions=frozenset(),
+        )
+    finally:
+        if previous is None:
+            os.environ.pop("GEMINI_RESOURCE_MODEL", None)
+        else:
+            os.environ["GEMINI_RESOURCE_MODEL"] = previous
+        reset_settings_cache()
+
+
+def _proposal(employee_id: str, requirement: str, *, display_name: str = "") -> dict[str, str]:
+    payload = {
+        "step_id": "step_allocate",
+        "requirement": requirement,
+        "resource_id": employee_id,
+        "resource_type": "employee",
+        "reason": "queued proposal",
+    }
+    if display_name:
+        payload["display_name"] = display_name
+    return payload
+
+
+def test_queued_proposal_for_employee_at_max_is_rejected(
+    org_a: UUID, user_a_id: UUID, client: TestClient
+) -> None:
+    employee = EmployeeRepository(org_a).create(
+        full_name="Maxed Python",
+        email="maxed-python@example.com",
+        primary_skills=["Python"],
+        current_workload_percent=100,
+        max_allocation_percent=100,
+    )
+    result = _queue_allocation(
+        org_a,
+        user_a_id,
+        "Python",
+        [_proposal(str(employee.id), "Python", display_name="Maxed Python")],
+    )
+    assert result.assignments == []
+    assert result.status == "needs_clarification"
+
+
+def test_queued_proposal_for_inactive_employee_is_rejected(
+    org_a: UUID, user_a_id: UUID, client: TestClient
+) -> None:
+    employee = EmployeeRepository(org_a).create(
+        full_name="Inactive Proposal",
+        email="inactive-proposal@example.com",
+        status="inactive",
+        primary_skills=["Python"],
+    )
+    result = _queue_allocation(
+        org_a,
+        user_a_id,
+        "Inactive Proposal",
+        [_proposal(str(employee.id), "Inactive Proposal")],
+    )
+    assert result.assignments == []
+    assert result.status == "needs_clarification"
+
+
+def test_queued_proposal_for_zero_availability_is_rejected(
+    org_a: UUID, user_a_id: UUID, client: TestClient
+) -> None:
+    employee = EmployeeRepository(org_a).create(
+        full_name="Unavailable Proposal",
+        email="unavailable-proposal@example.com",
+        availability_percent=0,
+        primary_skills=["Python"],
+    )
+    result = _queue_allocation(
+        org_a,
+        user_a_id,
+        "Unavailable Proposal",
+        [_proposal(str(employee.id), "Unavailable Proposal")],
+    )
+    assert result.assignments == []
+    assert result.status == "needs_clarification"
+
+
+def test_queued_proposal_with_unknown_employee_id_is_rejected(
+    org_a: UUID, user_a_id: UUID, client: TestClient
+) -> None:
+    result = _queue_allocation(
+        org_a,
+        user_a_id,
+        "Python",
+        [_proposal(str(uuid4()), "Python")],
+    )
+    assert result.assignments == []
+    assert result.status == "needs_clarification"
+
+
+def test_queued_proposal_with_wrong_skill_is_rejected(
+    org_a: UUID, user_a_id: UUID, client: TestClient
+) -> None:
+    employee = EmployeeRepository(org_a).create(
+        full_name="Java Only",
+        email="java-only@example.com",
+        primary_skills=["Java"],
+    )
+    result = _queue_allocation(
+        org_a,
+        user_a_id,
+        "Python",
+        [_proposal(str(employee.id), "Python")],
+    )
+    assert result.assignments == []
+    assert result.status == "needs_clarification"
+
+
+def test_queued_proposal_with_matching_skill_is_accepted(
+    org_a: UUID, user_a_id: UUID, client: TestClient
+) -> None:
+    skilled = EmployeeRepository(org_a).create(
+        full_name="Python Dev",
+        email="python-dev@example.com",
+        primary_skills=["Python"],
+        current_workload_percent=20,
+        max_allocation_percent=100,
+    )
+    other = EmployeeRepository(org_a).create(
+        full_name="Java Dev",
+        email="java-dev@example.com",
+        primary_skills=["Java"],
+        current_workload_percent=10,
+    )
+    result = _queue_allocation(
+        org_a,
+        user_a_id,
+        "Python",
+        [_proposal(str(skilled.id), "Python"), _proposal(str(other.id), "Python")],
+    )
+    assigned = {item.resource_id for item in result.assignments}
+    assert str(skilled.id) in assigned
+    assert str(other.id) not in assigned
+
+
+def test_explicit_employee_at_max_is_not_replaced_by_gemini(
+    org_a: UUID, user_a_id: UUID, client: TestClient
+) -> None:
+    EmployeeRepository(org_a).create(
+        full_name="John Silva",
+        email="john.silva@example.com",
+        current_workload_percent=80,
+        max_allocation_percent=80,
+    )
+    jane = EmployeeRepository(org_a).create(
+        full_name="Jane Perera",
+        email="jane.perera@example.com",
+        primary_skills=["Python"],
+        current_workload_percent=20,
+        max_allocation_percent=100,
+    )
+    requirement = "Assign John Silva to prepare the report."
+    result = _queue_allocation(
+        org_a,
+        user_a_id,
+        requirement,
+        [_proposal(str(jane.id), requirement, display_name="Jane Perera")],
+    )
+    assert all(item.resource_id != str(jane.id) for item in result.assignments)
+    assert result.assignments == []
+    assert result.status == "needs_clarification"
+    assert result.unresolved
+
+
+def test_explicit_eligible_employee_is_not_replaced_by_gemini(
+    org_a: UUID, user_a_id: UUID, client: TestClient
+) -> None:
+    john = EmployeeRepository(org_a).create(
+        full_name="John Silva",
+        email="john.silva@example.com",
+        current_workload_percent=30,
+        max_allocation_percent=100,
+    )
+    jane = EmployeeRepository(org_a).create(
+        full_name="Jane Perera",
+        email="jane.perera@example.com",
+        current_workload_percent=10,
+    )
+    requirement = "Assign John Silva to prepare the report."
+    result = _queue_allocation(
+        org_a,
+        user_a_id,
+        requirement,
+        [_proposal(str(jane.id), requirement, display_name="Jane Perera")],
+    )
+    assigned = {item.resource_id for item in result.assignments}
+    assert str(john.id) in assigned
+    assert str(jane.id) not in assigned
+
+
+def test_proposal_outside_candidate_list_is_rejected(
+    org_a: UUID, user_a_id: UUID, client: TestClient
+) -> None:
+    EmployeeRepository(org_a).create(full_name="Quinn Casey", email="quinn-one@example.com")
+    EmployeeRepository(org_a).create(full_name="Quinn Casey", email="quinn-two@example.com")
+    outsider = EmployeeRepository(org_a).create(
+        full_name="Outside Candidate",
+        email="outside-candidate@example.com",
+        current_workload_percent=10,
+    )
+    result = _queue_allocation(
+        org_a,
+        user_a_id,
+        "Quinn Casey",
+        [_proposal(str(outsider.id), "Quinn Casey", display_name="Outside Candidate")],
+    )
+    assert all(item.resource_id != str(outsider.id) for item in result.assignments)
+    assert result.status == "needs_clarification"
+
+
+def test_proposal_inside_candidate_list_is_accepted(
+    org_a: UUID, user_a_id: UUID, client: TestClient
+) -> None:
+    chosen = EmployeeRepository(org_a).create(
+        full_name="Quinn Casey",
+        email="quinn-chosen@example.com",
+    )
+    EmployeeRepository(org_a).create(full_name="Quinn Casey", email="quinn-other@example.com")
+    result = _queue_allocation(
+        org_a,
+        user_a_id,
+        "Quinn Casey",
+        [_proposal(str(chosen.id), "Quinn Casey")],
+    )
+    assert len(result.assignments) == 1
+    assert result.assignments[0].resource_id == str(chosen.id)
+    assert result.assignments[0].data_source.value == "llm_interpretation"
+
+
+def test_empty_fake_gemini_cannot_bypass_explicit_identity(
+    org_a: UUID, user_a_id: UUID, client: TestClient
+) -> None:
+    EmployeeRepository(org_a).create(
+        full_name="John Silva",
+        email="john.silva@example.com",
+        current_workload_percent=90,
+        max_allocation_percent=90,
+    )
+    silva = EmployeeRepository(org_a).create(
+        full_name="Silva",
+        email="silva-only@example.com",
+        current_workload_percent=10,
+        max_allocation_percent=100,
+    )
+    result = _queue_allocation(org_a, user_a_id, "John Silva", None)
+    assert result.assignments == []
+    assert all(item.resource_id != str(silva.id) for item in result.assignments)
+    assert result.status == "needs_clarification"
+
+
+def test_display_name_fallback_cannot_replace_explicit_employee(
+    org_a: UUID, user_a_id: UUID, client: TestClient
+) -> None:
+    EmployeeRepository(org_a).create(
+        full_name="John Silva",
+        email="john.silva@example.com",
+        current_workload_percent=80,
+        max_allocation_percent=80,
+    )
+    jane = EmployeeRepository(org_a).create(
+        full_name="Jane Perera",
+        email="jane.perera@example.com",
+        current_workload_percent=15,
+    )
+    requirement = "Assign John Silva to prepare the report."
+    result = _queue_allocation(
+        org_a,
+        user_a_id,
+        requirement,
+        [_proposal(str(uuid4()), requirement, display_name="Jane Perera")],
+    )
+    assert all(item.resource_id != str(jane.id) for item in result.assignments)
+    assert result.assignments == []
+    assert result.status == "needs_clarification"
