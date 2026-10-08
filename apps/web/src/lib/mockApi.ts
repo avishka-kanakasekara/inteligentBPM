@@ -829,7 +829,12 @@ export const mockApi = {
             : "intermediate",
         availability_percent: Number(body.availability_percent ?? 100),
         weekly_capacity_hours: Number(body.weekly_capacity_hours ?? 40),
-        current_workload_percent: Number(body.current_workload_percent ?? 0),
+        baseline_workload_percent: Number(
+          body.baseline_workload_percent ?? body.current_workload_percent ?? 0,
+        ),
+        current_workload_percent: Number(
+          body.baseline_workload_percent ?? body.current_workload_percent ?? 0,
+        ),
         cost_per_hour: (body.cost_per_hour as number | null) ?? null,
         monthly_cost: (body.monthly_cost as number | null) ?? null,
         max_allocation_percent: Number(body.max_allocation_percent ?? 100),
@@ -856,12 +861,23 @@ export const mockApi = {
       const index = employees.findIndex((employee) => employee.id === id);
       if (index < 0) throw new ApiError("Not found", { code: "NOT_FOUND", status: 404 });
       const current = employees[index];
+      const editable = { ...body };
+      delete editable.current_workload_percent;
+      const baseline =
+        typeof editable.baseline_workload_percent === "number"
+          ? editable.baseline_workload_percent
+          : current.baseline_workload_percent;
       const next: Employee = {
         ...current,
-        ...(body as Partial<Employee>),
+        ...(editable as Partial<Employee>),
         id: current.id,
         organization_id: current.organization_id,
         employee_code: current.employee_code,
+        baseline_workload_percent: baseline ?? current.baseline_workload_percent ?? 0,
+        current_workload_percent:
+          typeof editable.baseline_workload_percent === "number"
+            ? editable.baseline_workload_percent
+            : current.current_workload_percent,
       };
       employees = employees.map((employee) => (employee.id === id ? next : employee));
       return next as T;

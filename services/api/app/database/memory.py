@@ -81,6 +81,7 @@ class EmployeeRecord:
     skill_level: str = "intermediate"
     availability_percent: float = 100
     weekly_capacity_hours: float = 40
+    baseline_workload_percent: float = 0
     current_workload_percent: float = 0
     cost_per_hour: float | None = None
     monthly_cost: float | None = None
@@ -110,6 +111,7 @@ class EmployeeRecord:
             "skill_level": self.skill_level,
             "availability_percent": self.availability_percent,
             "weekly_capacity_hours": self.weekly_capacity_hours,
+            "baseline_workload_percent": self.baseline_workload_percent,
             "current_workload_percent": self.current_workload_percent,
             "cost_per_hour": self.cost_per_hour,
             "monthly_cost": self.monthly_cost,

@@ -101,6 +101,11 @@ async def create_employee(
     from app.billing.service import EntitlementService
     from app.repositories.memory_repos import EmployeeRepository
 
+    payload = body.model_dump(exclude={"organization_id"})
+    if "baseline_workload_percent" not in body.model_fields_set:
+        payload["baseline_workload_percent"] = payload.get("current_workload_percent", 0)
+    payload.pop("current_workload_percent", None)
+
     active = sum(
         1
         for e in EmployeeRepository(org.organization_id).list_all()
@@ -143,7 +148,10 @@ async def update_employee(
         employee_id,
         actor_user_id=user.id,
         correlation_id=get_correlation_id(request),
-        **body.model_dump(exclude_unset=True, exclude={"organization_id"}),
+        **body.model_dump(
+            exclude_unset=True,
+            exclude={"organization_id", "current_workload_percent"},
+        ),
     )
     return EmployeeResponse.model_validate(record, from_attributes=True)
 

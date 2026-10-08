@@ -154,11 +154,16 @@ class EmployeeService:
         self._assert_directory_refs(fields)
         self.repo.assert_no_active_email_duplicate(email_norm)
         fields.setdefault("status", ACTIVE)
+        fields.pop("current_workload_percent", None)
         record = self.repo.create(
             full_name=cleaned_name,
             email=email_norm,
             **fields,
         )
+        from app.services.workload import recompute_organization_workload
+
+        recompute_organization_workload(self.organization_id)
+        record = self.repo.get(record.id)
         self.audit.record(
             organization_id=self.organization_id,
             actor_user_id=actor_user_id,
@@ -185,15 +190,20 @@ class EmployeeService:
                 self.repo.assert_no_active_email_duplicate(email_norm, exclude_id=employee_id)
         if "full_name" in fields and fields["full_name"] is not None:
             fields["full_name"] = str(fields["full_name"]).strip()
+        fields.pop("current_workload_percent", None)
         self._assert_directory_refs(fields, employee_id=employee_id)
         current = self.repo.get(employee_id)
-        workload = fields.get("current_workload_percent", current.current_workload_percent)
+        baseline = fields.get("baseline_workload_percent", current.baseline_workload_percent)
         maximum = fields.get("max_allocation_percent", current.max_allocation_percent)
-        if workload is not None and maximum is not None and float(workload) > float(maximum):
+        if baseline is not None and maximum is not None and float(baseline) > float(maximum):
             raise ValidationAppError(
-                "current_workload_percent cannot exceed max_allocation_percent"
+                "baseline_workload_percent cannot exceed max_allocation_percent"
             )
         record = self.repo.update(employee_id, **fields)
+        from app.services.workload import recompute_organization_workload
+
+        recompute_organization_workload(self.organization_id)
+        record = self.repo.get(record.id)
         self.audit.record(
             organization_id=self.organization_id,
             actor_user_id=actor_user_id,

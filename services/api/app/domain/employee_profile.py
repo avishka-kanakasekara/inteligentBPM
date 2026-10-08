@@ -12,6 +12,7 @@ SKILL_LEVELS = frozenset({"beginner", "intermediate", "expert"})
 APPROVAL_TIERS = frozenset({"none", "team", "department", "business_unit", "executive"})
 PERCENT_FIELDS = (
     "availability_percent",
+    "baseline_workload_percent",
     "current_workload_percent",
     "max_allocation_percent",
     "sla_compliance_percent",
@@ -75,6 +76,7 @@ MUTABLE_FIELDS = frozenset(
         "skill_level",
         "availability_percent",
         "weekly_capacity_hours",
+        "baseline_workload_percent",
         "current_workload_percent",
         "cost_per_hour",
         "monthly_cost",
@@ -153,20 +155,18 @@ def validate_employee_profile(fields: dict[str, Any], *, employee_id: UUID | Non
     if manager_id is not None and employee_id is not None and manager_id == employee_id:
         raise ValidationAppError("Employee cannot report to themselves")
 
-    workload = fields.get("current_workload_percent")
     maximum = fields.get("max_allocation_percent")
-    if (
-        workload is not None
-        and maximum is not None
-        and float(workload) > float(maximum)
-    ):
-        raise ValidationAppError(
-            "current_workload_percent cannot exceed max_allocation_percent",
-            details={
-                "current_workload_percent": workload,
-                "max_allocation_percent": maximum,
-            },
-        )
+    for key in ("baseline_workload_percent", "current_workload_percent"):
+        workload = fields.get(key)
+        if (
+            workload is not None
+            and maximum is not None
+            and float(workload) > float(maximum)
+        ):
+            raise ValidationAppError(
+                f"{key} cannot exceed max_allocation_percent",
+                details={key: workload, "max_allocation_percent": maximum},
+            )
 
     for key in LIST_FIELDS:
         if key not in fields or fields[key] is None:

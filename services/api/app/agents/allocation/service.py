@@ -7,7 +7,11 @@ from typing import Any
 from uuid import UUID
 
 from app.agents.allocation.integrations import list_integration_availability
-from app.agents.allocation.matcher import DeterministicResourceMatcher, OrgCatalog
+from app.agents.allocation.matcher import (
+    DeterministicResourceMatcher,
+    OrgCatalog,
+    employee_eligible_for_allocation,
+)
 from app.agents.allocation.models import (
     AllocationAssistOutput,
     AuthorizationStatus,
@@ -447,6 +451,9 @@ class AllocationService:
             updated_at=now,
         )
         self.store.allocations[record.id] = record
+        from app.services.workload import recompute_organization_workload
+
+        recompute_organization_workload(self.organization_id)
         return record
 
     def _assignment_from_choice(
@@ -487,7 +494,7 @@ class AllocationService:
             emp = next((e for e in catalog.employees if e.id == rid), None)
             if emp is None or emp.organization_id != self.organization_id:
                 return None
-            if emp.status != "active":
+            if not employee_eligible_for_allocation(emp):
                 return None
             return ResourceAssignment(
                 step_id=step_id,
@@ -764,7 +771,11 @@ class AllocationService:
         if not key:
             return None
         emp = next(
-            (e for e in catalog.employees if e.status == "active" and e.full_name.lower() == key),
+            (
+                e
+                for e in catalog.employees
+                if employee_eligible_for_allocation(e) and e.full_name.lower() == key
+            ),
             None,
         )
         if emp and preferred_type in {
@@ -1004,7 +1015,7 @@ class AllocationService:
                 emp_hits = [
                     e
                     for e in catalog.employees
-                    if e.status == "active"
+                    if employee_eligible_for_allocation(e)
                     and len(e.full_name) >= 3
                     and e.full_name.lower() in req
                 ]

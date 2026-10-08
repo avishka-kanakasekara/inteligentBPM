@@ -31,6 +31,36 @@ def _norm(value: str) -> str:
     return re.sub(r"\s+", " ", value.strip().lower())
 
 
+def employee_eligible_for_allocation(employee: EmployeeRecord) -> bool:
+    """Hard ceiling for every employee-like assignment.
+
+    Suppliers, departments, and budgets do not use this check.
+    """
+    if employee.status != "active":
+        return False
+    if float(employee.availability_percent) <= 0:
+        return False
+    return float(employee.current_workload_percent) < float(employee.max_allocation_percent)
+
+
+def _phrase_in(haystack: str, needle: str) -> bool:
+    """True when needle is a whole word or phrase inside haystack."""
+    if len(needle) < 2:
+        return False
+    return re.search(rf"(?<!\w){re.escape(needle)}(?!\w)", haystack) is not None
+
+
+def _skill_text_matches(skill: str, requirement: str) -> bool:
+    """Case-insensitive skill match against the full requirement or a phrase inside it."""
+    left = _norm(skill)
+    right = _norm(requirement)
+    if not left or not right:
+        return False
+    if left == right:
+        return True
+    return _phrase_in(right, left) or _phrase_in(left, right)
+
+
 def infer_resource_type(requirement: str) -> ResourceType:
     text = _norm(requirement)
     # Artifacts / deliverables first — not directory people or suppliers
@@ -309,16 +339,17 @@ class DeterministicResourceMatcher:
         if rtype == ResourceType.MANAGER and employee_context_id is not None:
             managers = self._managers_for(employee_context_id)
             active = [m for m in managers if m.status == "active"]
-            if len(active) == 1:
+            eligible = [m for m in active if self._eligible_for_allocation(m)]
+            if len(eligible) == 1:
                 cand = self._employee_candidate(
-                    active[0],
+                    eligible[0],
                     reason="Deterministic manager hierarchy link",
                     data_source=DataSource.MANAGER_LINK,
                     confidence=0.98,
                     resource_type=ResourceType.MANAGER,
                 )
                 return MatchOutcome(assigned=cand, used_org_rule=True)
-            if len(active) > 1:
+            if len(eligible) > 1:
                 cands = [
                     self._employee_candidate(
                         m,
@@ -328,9 +359,16 @@ class DeterministicResourceMatcher:
                         resource_type=ResourceType.MANAGER,
                         conflict=ConflictStatus.AMBIGUOUS,
                     )
-                    for m in active
+                    for m in eligible
                 ]
                 return self._ambiguous(step_id, requirement, cands)
+            if active:
+                return self._blocked_employee_outcome(
+                    step_id=step_id,
+                    requirement=requirement,
+                    employees=active,
+                    rtype=ResourceType.MANAGER,
+                )
 
         # Org rule: department's designated manager
         if rtype == ResourceType.MANAGER and preferred_department_id is not None:
@@ -344,6 +382,13 @@ class DeterministicResourceMatcher:
                     None,
                 )
                 if mgr and mgr.status == "active":
+                    if not self._eligible_for_allocation(mgr):
+                        return self._blocked_employee_outcome(
+                            step_id=step_id,
+                            requirement=requirement,
+                            employees=[mgr],
+                            rtype=ResourceType.MANAGER,
+                        )
                     cand = self._employee_candidate(
                         mgr,
                         reason=f"Department rule: manager of {dept.name}",
@@ -457,18 +502,34 @@ class DeterministicResourceMatcher:
             ResourceType.UNKNOWN,
         }:
             role_key = text.replace(" ", "_")
-            for e in active_employees:
-                if e.role_code and _norm(e.role_code) in {text, role_key}:
-                    exact.append(e)
+            role_matches = [
+                e
+                for e in active_employees
+                if e.role_code and _norm(e.role_code) in {text, role_key}
+            ]
+            if role_matches:
+                eligible_roles = [e for e in role_matches if self._eligible_for_allocation(e)]
+                if not eligible_roles:
+                    return self._blocked_employee_outcome(
+                        step_id=step_id,
+                        requirement=requirement,
+                        employees=role_matches,
+                        rtype=rtype if rtype != ResourceType.UNKNOWN else ResourceType.EMPLOYEE,
+                    )
+                exact.extend(eligible_roles)
             if rtype == ResourceType.MANAGER:
                 managers = [e for e in active_employees if e.is_manager]
                 if preferred_department_id:
                     managers = [
                         e for e in managers if e.department_id == preferred_department_id
                     ]
-                if len(managers) == 1 and ("manager" in text or text in {"approver", "mgr"}):
+                eligible_managers = [e for e in managers if self._eligible_for_allocation(e)]
+                if (
+                    len(eligible_managers) == 1
+                    and ("manager" in text or text in {"approver", "mgr"})
+                ):
                     cand = self._employee_candidate(
-                        managers[0],
+                        eligible_managers[0],
                         reason="Single active manager matches org rule",
                         data_source=DataSource.ROLE_RULE,
                         confidence=0.9,
@@ -476,6 +537,13 @@ class DeterministicResourceMatcher:
                     )
                     return MatchOutcome(assigned=cand, used_org_rule=True)
                 if len(managers) > 1 and text in {"manager", "approver", "mgr"}:
+                    if not eligible_managers:
+                        return self._blocked_employee_outcome(
+                            step_id=step_id,
+                            requirement=requirement,
+                            employees=managers,
+                            rtype=ResourceType.MANAGER,
+                        )
                     cands = [
                         self._employee_candidate(
                             m,
@@ -485,12 +553,13 @@ class DeterministicResourceMatcher:
                             resource_type=ResourceType.MANAGER,
                             conflict=ConflictStatus.AMBIGUOUS,
                         )
-                        for m in managers
+                        for m in eligible_managers
                     ]
                     return self._ambiguous(step_id, requirement, cands)
 
         if rtype == ResourceType.APPROVAL_AUTHORITY and not exact:
             # Prefer managers for generic "approver" / Final PO — pick highest authority so work proceeds
+            role_pref: list[EmployeeRecord] = []
             if any(
                 k in text
                 for k in ("approver", "approval", "authority", "final po", "po approval")
@@ -505,36 +574,9 @@ class DeterministicResourceMatcher:
                     dept_pref = [e for e in role_pref if e.department_id == preferred_department_id]
                     if dept_pref:
                         role_pref = dept_pref
-                if len(role_pref) == 1:
-                    cand = self._employee_candidate(
-                        role_pref[0],
-                        reason="Deterministic approver match from manager role",
-                        data_source=DataSource.ROLE_RULE,
-                        confidence=0.9,
-                        resource_type=ResourceType.APPROVAL_AUTHORITY,
-                    )
-                    return MatchOutcome(assigned=cand, used_org_rule=True)
-                if len(role_pref) > 1:
-                    ranked = sorted(
-                        role_pref,
-                        key=lambda e: (e.approval_authority_limit or 0, e.is_manager),
-                        reverse=True,
-                    )
-                    primary = ranked[0]
-                    cands = [
-                        self._employee_candidate(
-                            e,
-                            reason="Approver candidate (manager)",
-                            data_source=DataSource.ROLE_RULE,
-                            confidence=0.9 if e.id == primary.id else 0.65,
-                            resource_type=ResourceType.APPROVAL_AUTHORITY,
-                            conflict=ConflictStatus.NONE
-                            if e.id == primary.id
-                            else ConflictStatus.AMBIGUOUS,
-                        )
-                        for e in ranked[:8]
-                    ]
-                    return MatchOutcome(assigned=cands[0], candidates=cands, used_org_rule=True)
+                eligible_pref = [e for e in role_pref if self._eligible_for_allocation(e)]
+                if eligible_pref:
+                    return self._ranked_approval_outcome(eligible_pref, manager_role=True)
             authorities = [
                 e
                 for e in active_employees
@@ -548,36 +590,19 @@ class DeterministicResourceMatcher:
                 dept_auth = [e for e in authorities if e.department_id == preferred_department_id]
                 if dept_auth:
                     authorities = dept_auth
-            if len(authorities) == 1:
-                cand = self._employee_candidate(
-                    authorities[0],
-                    reason="Deterministic approval authority match",
-                    data_source=DataSource.ROLE_RULE,
-                    confidence=0.92,
-                    resource_type=ResourceType.APPROVAL_AUTHORITY,
+            eligible_authorities = [
+                e for e in authorities if self._eligible_for_allocation(e)
+            ]
+            if eligible_authorities:
+                return self._ranked_approval_outcome(eligible_authorities, manager_role=False)
+            blocked = authorities or role_pref
+            if blocked:
+                return self._blocked_employee_outcome(
+                    step_id=step_id,
+                    requirement=requirement,
+                    employees=blocked,
+                    rtype=ResourceType.APPROVAL_AUTHORITY,
                 )
-                return MatchOutcome(assigned=cand, used_org_rule=True)
-            if len(authorities) > 1:
-                ranked = sorted(
-                    authorities,
-                    key=lambda e: (e.approval_authority_limit or 0, e.is_manager),
-                    reverse=True,
-                )
-                primary = ranked[0]
-                cands = [
-                    self._employee_candidate(
-                        e,
-                        reason="Highest approval authority among directory matches",
-                        data_source=DataSource.DIRECTORY_QUERY,
-                        confidence=0.88 if e.id == primary.id else 0.6,
-                        resource_type=ResourceType.APPROVAL_AUTHORITY,
-                        conflict=ConflictStatus.NONE
-                        if e.id == primary.id
-                        else ConflictStatus.AMBIGUOUS,
-                    )
-                    for e in ranked[:8]
-                ]
-                return MatchOutcome(assigned=cands[0], candidates=cands)
 
         if len(exact) == 1:
             e = exact[0]
@@ -602,6 +627,13 @@ class DeterministicResourceMatcher:
                         ],
                     )
                 )
+            if not self._eligible_for_allocation(e):
+                return self._blocked_employee_outcome(
+                    step_id=step_id,
+                    requirement=requirement,
+                    employees=[e],
+                    rtype=rtype,
+                )
             cand = self._employee_candidate(
                 e,
                 reason="Exact directory match",
@@ -624,6 +656,18 @@ class DeterministicResourceMatcher:
                 for e in exact
             ]
             return self._ambiguous(step_id, requirement, cands)
+
+        # Skill ranking only after identity and role matching miss, and never
+        # for manager or approval-authority requirements.
+        if rtype in {ResourceType.EMPLOYEE, ResourceType.UNKNOWN} and not exact:
+            skill_outcome = self._match_people_by_skills(
+                step_id=step_id,
+                requirement=requirement,
+                text=text,
+                rtype=rtype,
+            )
+            if skill_outcome is not None:
+                return skill_outcome
 
         # Partial name matches → candidates only (never invent)
         partial = [
@@ -654,6 +698,192 @@ class DeterministicResourceMatcher:
                 question=f"No active directory match for '{requirement}'. Who should be assigned?",
             )
         )
+
+    def _skills_include(self, skills: list[str], requirement: str) -> bool:
+        return any(_skill_text_matches(skill, requirement) for skill in skills)
+
+    def _skill_match_rank(self, employee: EmployeeRecord, requirement: str) -> int | None:
+        """2 for a primary-skill match, 1 for secondary only, None when neither matches."""
+        if self._skills_include(employee.primary_skills, requirement):
+            return 2
+        if self._skills_include(employee.secondary_skills, requirement):
+            return 1
+        return None
+
+    def _eligible_for_allocation(self, employee: EmployeeRecord) -> bool:
+        return employee_eligible_for_allocation(employee)
+
+    def _blocked_employee_outcome(
+        self,
+        *,
+        step_id: str,
+        requirement: str,
+        employees: list[EmployeeRecord],
+        rtype: ResourceType,
+    ) -> MatchOutcome:
+        """Explicit or qualified employee cannot take new work. Do not substitute someone else."""
+        resource_type = rtype if rtype != ResourceType.UNKNOWN else ResourceType.EMPLOYEE
+        if len(employees) == 1:
+            person = employees[0]
+            if float(person.current_workload_percent) >= float(person.max_allocation_percent):
+                message = f"{person.full_name} is at maximum allocation capacity."
+            else:
+                message = f"{person.full_name} is unavailable and cannot be assigned."
+        else:
+            message = "No eligible employee is below maximum allocation capacity."
+        candidates = [
+            self._employee_candidate(
+                person,
+                reason=message,
+                data_source=DataSource.DIRECTORY_QUERY,
+                confidence=0.4,
+                resource_type=resource_type,
+                conflict=ConflictStatus.RULE_VIOLATION,
+            )
+            for person in employees[:8]
+        ]
+        return MatchOutcome(
+            candidates=candidates,
+            conflict=ResourceConflict(
+                id=f"conf_{step_id}_{_slug(requirement)}",
+                step_id=step_id,
+                requirement=requirement,
+                conflict_status=ConflictStatus.RULE_VIOLATION,
+                message=message,
+                candidates=candidates,
+            ),
+            unresolved=UnresolvedResource(
+                id=f"unres_{step_id}_{_slug(requirement)}",
+                step_id=step_id,
+                requirement=requirement,
+                resource_type=resource_type,
+                question=message,
+                candidates=candidates,
+            ),
+        )
+
+    def _ranked_approval_outcome(
+        self,
+        employees: list[EmployeeRecord],
+        *,
+        manager_role: bool,
+    ) -> MatchOutcome:
+        """Keep approval-limit ranking. Callers pass only capacity-eligible employees."""
+        if len(employees) == 1:
+            reason = (
+                "Deterministic approver match from manager role"
+                if manager_role
+                else "Deterministic approval authority match"
+            )
+            cand = self._employee_candidate(
+                employees[0],
+                reason=reason,
+                data_source=DataSource.ROLE_RULE,
+                confidence=0.9 if manager_role else 0.92,
+                resource_type=ResourceType.APPROVAL_AUTHORITY,
+            )
+            return MatchOutcome(assigned=cand, used_org_rule=True)
+        ranked = sorted(
+            employees,
+            key=lambda e: (e.approval_authority_limit or 0, e.is_manager),
+            reverse=True,
+        )
+        primary = ranked[0]
+        if manager_role:
+            reason = "Approver candidate (manager)"
+            source = DataSource.ROLE_RULE
+            primary_confidence = 0.9
+            other_confidence = 0.65
+        else:
+            reason = "Highest approval authority among directory matches"
+            source = DataSource.DIRECTORY_QUERY
+            primary_confidence = 0.88
+            other_confidence = 0.6
+        cands = [
+            self._employee_candidate(
+                employee,
+                reason=reason,
+                data_source=source,
+                confidence=primary_confidence if employee.id == primary.id else other_confidence,
+                resource_type=ResourceType.APPROVAL_AUTHORITY,
+                conflict=ConflictStatus.NONE
+                if employee.id == primary.id
+                else ConflictStatus.AMBIGUOUS,
+            )
+            for employee in ranked[:8]
+        ]
+        return MatchOutcome(assigned=cands[0], candidates=cands, used_org_rule=manager_role)
+
+    def _eligible_for_skill_allocation(self, employee: EmployeeRecord) -> bool:
+        return self._eligible_for_allocation(employee)
+
+    def _score_employee_candidate(
+        self, employee: EmployeeRecord, skill_rank: int
+    ) -> tuple[int, float, float, float, str]:
+        """Sort key: primary skill, lower workload, higher availability, more remaining capacity.
+
+        The employee id is only a final tie-break so equal scores do not follow
+        table order, insertion order, or created_at.
+        """
+        workload = float(employee.current_workload_percent)
+        availability = float(employee.availability_percent)
+        remaining = float(employee.max_allocation_percent) - workload
+        return (
+            0 if skill_rank >= 2 else 1,
+            workload,
+            -availability,
+            -remaining,
+            str(employee.id),
+        )
+
+    def _skill_selection_reason(self, employee: EmployeeRecord, skill_rank: int) -> str:
+        tier = "primary" if skill_rank >= 2 else "secondary"
+        workload = float(employee.current_workload_percent)
+        shown = str(int(workload)) if workload == int(workload) else f"{workload:g}"
+        return f"Selected based on {tier} skill match and lower workload ({shown}%)"
+
+    def _match_people_by_skills(
+        self,
+        *,
+        step_id: str,
+        requirement: str,
+        text: str,
+        rtype: ResourceType,
+    ) -> MatchOutcome | None:
+        if not text:
+            return None
+        ranked: list[tuple[tuple[int, float, float, float, str], EmployeeRecord, int]] = []
+        for employee in self.catalog.employees:
+            if not self._eligible_for_skill_allocation(employee):
+                continue
+            skill_rank = self._skill_match_rank(employee, text)
+            if skill_rank is None:
+                continue
+            ranked.append(
+                (self._score_employee_candidate(employee, skill_rank), employee, skill_rank)
+            )
+        if not ranked:
+            return None
+        ranked.sort(key=lambda item: item[0])
+        resource_type = rtype if rtype != ResourceType.UNKNOWN else ResourceType.EMPLOYEE
+        candidates = [
+            self._employee_candidate(
+                employee,
+                reason=self._skill_selection_reason(employee, skill_rank)
+                if index == 0
+                else (
+                    "Primary skill match"
+                    if skill_rank >= 2
+                    else "Secondary skill match"
+                ),
+                data_source=DataSource.DIRECTORY_QUERY,
+                confidence=0.9 if skill_rank >= 2 else 0.75,
+                resource_type=resource_type,
+                conflict=ConflictStatus.NONE if index == 0 else ConflictStatus.AMBIGUOUS,
+            )
+            for index, (_, employee, skill_rank) in enumerate(ranked)
+        ]
+        return MatchOutcome(assigned=candidates[0], candidates=candidates)
 
     def _managers_for(self, employee_id: UUID) -> list[EmployeeRecord]:
         manager_ids = {

@@ -117,6 +117,7 @@ class EmployeeCreate(APIModel):
     skill_level: Literal["beginner", "intermediate", "expert"] = "intermediate"
     availability_percent: float = Field(default=100, ge=0, le=100)
     weekly_capacity_hours: float = Field(default=40, ge=0, le=168)
+    baseline_workload_percent: float = Field(default=0, ge=0, le=100)
     current_workload_percent: float = Field(default=0, ge=0, le=100)
     cost_per_hour: float | None = Field(default=None, ge=0)
     monthly_cost: float | None = Field(default=None, ge=0)
@@ -195,6 +196,7 @@ class EmployeeUpdate(APIModel):
     skill_level: Literal["beginner", "intermediate", "expert"] | None = None
     availability_percent: float | None = Field(default=None, ge=0, le=100)
     weekly_capacity_hours: float | None = Field(default=None, ge=0, le=168)
+    baseline_workload_percent: float | None = Field(default=None, ge=0, le=100)
     current_workload_percent: float | None = Field(default=None, ge=0, le=100)
     cost_per_hour: float | None = Field(default=None, ge=0)
     monthly_cost: float | None = Field(default=None, ge=0)
@@ -282,6 +284,7 @@ class EmployeeResponse(APIModel):
     skill_level: str = "intermediate"
     availability_percent: float = 100
     weekly_capacity_hours: float = 40
+    baseline_workload_percent: float = 0
     current_workload_percent: float = 0
     cost_per_hour: float | None = None
     monthly_cost: float | None = None
