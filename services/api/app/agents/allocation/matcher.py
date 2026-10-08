@@ -43,6 +43,51 @@ def employee_eligible_for_allocation(employee: EmployeeRecord) -> bool:
     return float(employee.current_workload_percent) < float(employee.max_allocation_percent)
 
 
+def explicit_employee_identity(catalog: OrgCatalog, requirement: str) -> EmployeeRecord | None:
+    """The one directory employee named by email, code, full name, or a contained name.
+
+    Role codes are not identities. Multiple equal matches are not a single identity.
+    """
+    text = _norm(requirement)
+    if not text:
+        return None
+    exact = [
+        employee
+        for employee in catalog.employees
+        if _norm(employee.email) == text
+        or (employee.employee_code and _norm(employee.employee_code) == text)
+        or _norm(employee.full_name) == text
+    ]
+    if len(exact) == 1:
+        return exact[0]
+    if len(exact) > 1:
+        return None
+    contained = [
+        employee
+        for employee in catalog.employees
+        if employee.status == "active"
+        and len(_norm(employee.full_name)) >= 3
+        and _norm(employee.full_name) in text
+    ]
+    if not contained:
+        return None
+    contained.sort(key=lambda employee: len(employee.full_name), reverse=True)
+    best_len = len(_norm(contained[0].full_name))
+    contained = [employee for employee in contained if len(_norm(employee.full_name)) == best_len]
+    if len(contained) == 1:
+        return contained[0]
+    return None
+
+
+def employee_skill_match_rank(employee: EmployeeRecord, requirement: str) -> int | None:
+    """2 for a primary-skill match, 1 for secondary only, None when neither matches."""
+    if any(_skill_text_matches(skill, requirement) for skill in employee.primary_skills):
+        return 2
+    if any(_skill_text_matches(skill, requirement) for skill in employee.secondary_skills):
+        return 1
+    return None
+
+
 def _phrase_in(haystack: str, needle: str) -> bool:
     """True when needle is a whole word or phrase inside haystack."""
     if len(needle) < 2:
@@ -699,16 +744,9 @@ class DeterministicResourceMatcher:
             )
         )
 
-    def _skills_include(self, skills: list[str], requirement: str) -> bool:
-        return any(_skill_text_matches(skill, requirement) for skill in skills)
-
     def _skill_match_rank(self, employee: EmployeeRecord, requirement: str) -> int | None:
         """2 for a primary-skill match, 1 for secondary only, None when neither matches."""
-        if self._skills_include(employee.primary_skills, requirement):
-            return 2
-        if self._skills_include(employee.secondary_skills, requirement):
-            return 1
-        return None
+        return employee_skill_match_rank(employee, requirement)
 
     def _eligible_for_allocation(self, employee: EmployeeRecord) -> bool:
         return employee_eligible_for_allocation(employee)

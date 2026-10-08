@@ -11,6 +11,8 @@ from app.agents.allocation.matcher import (
     DeterministicResourceMatcher,
     OrgCatalog,
     employee_eligible_for_allocation,
+    employee_skill_match_rank,
+    explicit_employee_identity,
 )
 from app.agents.allocation.models import (
     AllocationAssistOutput,
@@ -29,7 +31,7 @@ from app.agents.allocation.models import (
 from app.agents.discovery.models import ProcessPlan
 from app.audit import AuditService
 from app.contracts.common import utcnow
-from app.database.memory import AllocationResultRecord, get_memory_store, new_id
+from app.database.memory import AllocationResultRecord, EmployeeRecord, get_memory_store, new_id
 from app.llm.client import FakeGeminiClient, GeminiClient, create_gemini_client
 from app.llm.prompt_registry import PromptRegistry
 from app.llm.structured import StructuredGenerationService
@@ -50,6 +52,29 @@ from app.security.errors import NotFoundError, ValidationAppError
 import structlog
 
 logger = structlog.get_logger()
+
+
+def _catalog_employee(
+    catalog: OrgCatalog,
+    resource_id: str,
+    display_name: str,
+) -> EmployeeRecord | None:
+    """Prefer a real directory id. A fake id may use a unique display name."""
+    try:
+        parsed = UUID(resource_id)
+    except ValueError:
+        parsed = None
+    if parsed is not None:
+        found = next((employee for employee in catalog.employees if employee.id == parsed), None)
+        if found is not None:
+            return found
+    key = display_name.strip().lower()
+    if not key:
+        return None
+    matches = [employee for employee in catalog.employees if employee.full_name.lower() == key]
+    if len(matches) == 1:
+        return matches[0]
+    return None
 
 
 class AllocationService:
@@ -684,6 +709,85 @@ class AllocationService:
             ],
         }
 
+    def _open_requirement(
+        self,
+        unresolved: list[UnresolvedResource],
+        step_id: str,
+        requirement: str,
+    ) -> UnresolvedResource | None:
+        key = (step_id, requirement.strip().lower())
+        for item in unresolved:
+            if (item.step_id, item.requirement.strip().lower()) == key:
+                return item
+        return None
+
+    def _employee_proposal_allowed(
+        self,
+        catalog: OrgCatalog,
+        requirement: str,
+        employee: EmployeeRecord,
+        candidate_ids: set[str],
+    ) -> bool:
+        """Final gate. Gemini cannot outrank explicit identity, candidates, or skills."""
+        if employee.organization_id != self.organization_id:
+            return False
+        if not employee_eligible_for_allocation(employee):
+            return False
+        identified = explicit_employee_identity(catalog, requirement)
+        if identified is not None:
+            if not employee_eligible_for_allocation(identified):
+                return False
+            return identified.id == employee.id
+        if candidate_ids:
+            return str(employee.id) in candidate_ids
+        return employee_skill_match_rank(employee, requirement) is not None
+
+    def _non_employee_proposal(
+        self,
+        step_id: str,
+        requirement: str,
+        resource_id: str,
+        rtype: ResourceType,
+        display_hint: str,
+        catalog: OrgCatalog,
+    ) -> ResourceAssignment | None:
+        guesses = (
+            [
+                ResourceType.SUPPLIER,
+                ResourceType.SUPPLIER_CONTACT,
+                ResourceType.DEPARTMENT,
+                ResourceType.BUDGET,
+            ]
+            if rtype == ResourceType.UNKNOWN
+            else [rtype]
+        )
+        assigned = None
+        if resource_id:
+            for guess in guesses:
+                assigned = self._assignment_from_choice(
+                    step_id,
+                    requirement,
+                    ClarificationChoice(
+                        step_id=step_id,
+                        requirement=requirement,
+                        resource_id=resource_id,
+                        resource_type=guess,
+                    ),
+                    catalog,
+                )
+                if assigned is not None:
+                    break
+        if assigned is None and display_hint:
+            preferred = rtype if rtype != ResourceType.UNKNOWN else ResourceType.SUPPLIER
+            assigned = self._assignment_from_display_name(
+                step_id,
+                requirement,
+                display_hint,
+                catalog,
+                preferred_type=preferred,
+            )
+        return assigned
+
     def _apply_llm_proposals(
         self,
         *,
@@ -717,35 +821,57 @@ class AllocationService:
             except ValueError:
                 rtype = ResourceType.UNKNOWN
 
+            gap = self._open_requirement(unresolved, step_id, requirement)
+            if gap is None:
+                continue
+            candidate_ids = {candidate.resource_id for candidate in gap.candidates}
             assigned = None
-            if resource_id:
-                choice = ClarificationChoice(
-                    step_id=step_id,
-                    requirement=requirement,
-                    resource_id=resource_id,
-                    resource_type=rtype if rtype != ResourceType.UNKNOWN else ResourceType.EMPLOYEE,
-                )
-                assigned = self._assignment_from_choice(step_id, requirement, choice, catalog)
-                if assigned is None and rtype == ResourceType.UNKNOWN:
-                    for guess in (
-                        ResourceType.EMPLOYEE,
-                        ResourceType.SUPPLIER,
-                        ResourceType.SUPPLIER_CONTACT,
-                        ResourceType.DEPARTMENT,
-                        ResourceType.BUDGET,
-                        ResourceType.MANAGER,
-                        ResourceType.APPROVAL_AUTHORITY,
+            employee_types = {
+                ResourceType.EMPLOYEE,
+                ResourceType.MANAGER,
+                ResourceType.APPROVAL_AUTHORITY,
+                ResourceType.UNKNOWN,
+            }
+            if rtype in employee_types:
+                employee = _catalog_employee(catalog, resource_id, display_hint)
+                if employee is not None:
+                    if not self._employee_proposal_allowed(
+                        catalog,
+                        gap.requirement,
+                        employee,
+                        candidate_ids,
                     ):
-                        choice.resource_type = guess
-                        assigned = self._assignment_from_choice(
-                            step_id, requirement, choice, catalog
-                        )
-                        if assigned is not None:
-                            break
-
-            if assigned is None and display_hint:
-                assigned = self._assignment_from_display_name(
-                    step_id, requirement, display_hint, catalog, preferred_type=rtype
+                        continue
+                    choice_type = (
+                        rtype if rtype != ResourceType.UNKNOWN else ResourceType.EMPLOYEE
+                    )
+                    assigned = self._assignment_from_choice(
+                        step_id,
+                        gap.requirement,
+                        ClarificationChoice(
+                            step_id=step_id,
+                            requirement=gap.requirement,
+                            resource_id=str(employee.id),
+                            resource_type=choice_type,
+                        ),
+                        catalog,
+                    )
+                    if assigned is None:
+                        continue
+                elif rtype != ResourceType.UNKNOWN:
+                    continue
+            if assigned is None and rtype not in {
+                ResourceType.EMPLOYEE,
+                ResourceType.MANAGER,
+                ResourceType.APPROVAL_AUTHORITY,
+            }:
+                assigned = self._non_employee_proposal(
+                    step_id,
+                    gap.requirement,
+                    resource_id,
+                    rtype,
+                    display_hint,
+                    catalog,
                 )
 
             if assigned is None:
