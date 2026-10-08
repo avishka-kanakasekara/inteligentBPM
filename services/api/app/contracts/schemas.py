@@ -197,6 +197,7 @@ class EmployeeUpdate(APIModel):
     availability_percent: float | None = Field(default=None, ge=0, le=100)
     weekly_capacity_hours: float | None = Field(default=None, ge=0, le=168)
     baseline_workload_percent: float | None = Field(default=None, ge=0, le=100)
+    current_workload_percent: float | None = Field(default=None, ge=0, le=100)
     cost_per_hour: float | None = Field(default=None, ge=0)
     monthly_cost: float | None = Field(default=None, ge=0)
     max_allocation_percent: float | None = Field(default=None, ge=0, le=100)
