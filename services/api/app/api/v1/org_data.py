@@ -117,7 +117,6 @@ async def create_employee(
         current_usage=active,
         increment=1,
     )
-    payload = body.model_dump(exclude={"organization_id"})
     record = EmployeeService(org.organization_id).create(
         actor_user_id=user.id,
         correlation_id=get_correlation_id(request),

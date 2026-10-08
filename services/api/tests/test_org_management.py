@@ -450,6 +450,8 @@ def test_employee_workforce_profile_create_and_update(
     )
     assert created.status_code == 201
     body = created.json()
+    assert body["baseline_workload_percent"] == 20
+    assert body["current_workload_percent"] == 20
     assert body["employee_code"].startswith("EMP-")
     assert body["employment_type"] == "contract"
     assert body["primary_skills"] == ["process design", "bpmn"]

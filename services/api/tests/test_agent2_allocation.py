@@ -6,7 +6,11 @@ from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
 
-from app.agents.allocation.matcher import DeterministicResourceMatcher, OrgCatalog
+from app.agents.allocation.matcher import (
+    DeterministicResourceMatcher,
+    OrgCatalog,
+    infer_resource_type,
+)
 from app.agents.allocation.models import ResourceType
 from app.agents.allocation.service import AllocationService
 from app.agents.discovery.models import ActionType, ProcessPlan, ProcessStep, RiskLevel
@@ -1224,3 +1228,86 @@ def test_display_name_fallback_cannot_replace_explicit_employee(
     assert all(item.resource_id != str(jane.id) for item in result.assignments)
     assert result.assignments == []
     assert result.status == "needs_clarification"
+
+
+def test_email_address_is_not_classified_as_integration() -> None:
+    for requirement in (
+        "email-max@example.com",
+        "john.email@example.com",
+        "employee.email@company.com",
+    ):
+        assert infer_resource_type(requirement) == ResourceType.EMPLOYEE
+
+
+def test_email_phrases_stay_integrations() -> None:
+    for requirement in (
+        "email integration",
+        "send email",
+        "email system",
+        "company email tool",
+    ):
+        assert infer_resource_type(requirement) == ResourceType.INTEGRATION
+
+
+def test_integration_keywords_keep_existing_classification() -> None:
+    for requirement in ("form", "tool", "system", "list", "directory", "software"):
+        assert infer_resource_type(requirement) == ResourceType.INTEGRATION
+    # "template" is an artifact keyword first, then match() still binds an integration.
+    assert infer_resource_type("template") == ResourceType.UNKNOWN
+
+
+def test_template_keyword_still_maps_to_integration(org_a: UUID) -> None:
+    outcome = DeterministicResourceMatcher(OrgCatalog(organization_id=org_a)).match(
+        step_id="s1",
+        requirement="template",
+    )
+    assert outcome.assigned is not None
+    assert outcome.assigned.resource_type == ResourceType.INTEGRATION
+
+
+def test_email_address_reaches_exact_employee_match(org_a: UUID) -> None:
+    employee = EmployeeRepository(org_a).create(
+        full_name="Email Liaison",
+        email="email-max@example.com",
+        employee_code="EMAIL-42",
+    )
+    other = EmployeeRepository(org_a).create(
+        full_name="John Email",
+        email="john.email@example.com",
+        employee_code="EMAIL-77",
+    )
+    catalog = OrgCatalog(
+        organization_id=org_a,
+        employees=EmployeeRepository(org_a).list_all(),
+    )
+    matcher = DeterministicResourceMatcher(catalog)
+
+    for person, requirement in (
+        (employee, "email-max@example.com"),
+        (other, "john.email@example.com"),
+    ):
+        outcome = matcher.match(step_id="s1", requirement=requirement)
+        assert outcome.assigned is not None
+        assert outcome.assigned.resource_id == str(person.id)
+        assert outcome.assigned.resource_type == ResourceType.EMPLOYEE
+
+
+def test_employee_email_with_email_in_name_and_code_is_not_an_integration(
+    org_a: UUID,
+) -> None:
+    employee = EmployeeRepository(org_a).create(
+        full_name="Email Coordinator",
+        email="employee.email@company.com",
+        employee_code="EMAIL-9",
+    )
+    catalog = OrgCatalog(
+        organization_id=org_a,
+        employees=EmployeeRepository(org_a).list_all(),
+    )
+    outcome = DeterministicResourceMatcher(catalog).match(
+        step_id="s1",
+        requirement="employee.email@company.com",
+    )
+    assert outcome.assigned is not None
+    assert outcome.assigned.resource_id == str(employee.id)
+    assert outcome.assigned.resource_type == ResourceType.EMPLOYEE

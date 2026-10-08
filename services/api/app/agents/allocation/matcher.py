@@ -106,8 +106,15 @@ def _skill_text_matches(skill: str, requirement: str) -> bool:
     return _phrase_in(right, left) or _phrase_in(left, right)
 
 
+# Same address shape as the email integration, applied to the whole requirement.
+_EMAIL_ADDRESS = re.compile(r"^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$")
+
+
 def infer_resource_type(requirement: str) -> ResourceType:
     text = _norm(requirement)
+    # A bare email address is an employee identity, even when it contains "email".
+    if _EMAIL_ADDRESS.fullmatch(text):
+        return ResourceType.EMPLOYEE
     # Artifacts / deliverables first — not directory people or suppliers
     if any(
         k in text
