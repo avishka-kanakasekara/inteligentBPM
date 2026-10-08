@@ -471,6 +471,9 @@ class DefaultActivityRunner:
             run = ProcessRunRepository(ctx.organization_id).get(ctx.process_run_id)
             run.status = ProcessRunStatus.FAILED
             run.updated_at = now
+            from app.services.workload import recompute_organization_workload
+
+            recompute_organization_workload(ctx.organization_id)
             raise ActivityError("Approval expired", error_type="ApprovalExpired", retryable=False)
 
         if record.status == ApprovalStatus.PENDING:
@@ -639,4 +642,7 @@ class DefaultActivityRunner:
         run = ProcessRunRepository(ctx.organization_id).get(ctx.process_run_id)
         run.status = ProcessRunStatus.COMPLETED
         run.updated_at = utcnow()
+        from app.services.workload import recompute_organization_workload
+
+        recompute_organization_workload(ctx.organization_id)
         return ActivityResult(data={"status": "completed"}, terminal_status="completed")

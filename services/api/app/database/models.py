@@ -93,6 +93,9 @@ class EmployeeModel(Base):
     skill_level: Mapped[str] = mapped_column(Text, nullable=False, default="intermediate")
     availability_percent: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False, default=100)
     weekly_capacity_hours: Mapped[float] = mapped_column(Numeric(6, 2), nullable=False, default=40)
+    baseline_workload_percent: Mapped[float] = mapped_column(
+        Numeric(5, 2), nullable=False, default=0
+    )
     current_workload_percent: Mapped[float] = mapped_column(
         Numeric(5, 2), nullable=False, default=0
     )

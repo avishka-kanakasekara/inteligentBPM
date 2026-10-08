@@ -479,3 +479,441 @@ def test_integrations_listed_without_side_effects(
     before = len(get_memory_store().employees)
     client.post(f"/v1/processes/{process_id}/allocate", headers=auth_headers_a, json={})
     assert len(get_memory_store().employees) == before
+
+
+def _allocate_requirement(
+    client: TestClient,
+    org_id: UUID,
+    headers: dict[str, str],
+    requirement: str,
+) -> dict:
+    process_id, _ = _seed_process_version(org_id, _plan_with_resources(requirement))
+    response = client.post(
+        f"/v1/processes/{process_id}/allocate",
+        headers=headers,
+        json={},
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def test_skill_match_prefers_lower_workload(
+    org_a: UUID, auth_headers_a: dict[str, str], client: TestClient
+) -> None:
+    EmployeeRepository(org_a).create(
+        full_name="Employee A",
+        email="a@example.com",
+        primary_skills=["Python"],
+        current_workload_percent=90,
+    )
+    employee_b = EmployeeRepository(org_a).create(
+        full_name="Employee B",
+        email="b@example.com",
+        primary_skills=["Python"],
+        current_workload_percent=30,
+    )
+    EmployeeRepository(org_a).create(
+        full_name="Employee C",
+        email="c@example.com",
+        primary_skills=["Java"],
+        current_workload_percent=10,
+    )
+    body = _allocate_requirement(client, org_a, auth_headers_a, "Python")
+    assert body["status"] == "resolved"
+    assert len(body["assignments"]) == 1
+    assignment = body["assignments"][0]
+    assert assignment["resource_id"] == str(employee_b.id)
+    assert assignment["display_name"] == "Employee B"
+    assert "primary skill match" in assignment["reason"]
+    assert "30%" in assignment["reason"]
+    assert float(employee_b.baseline_workload_percent) == 30
+    assert float(employee_b.current_workload_percent) == 40
+
+
+def test_skill_match_skips_employee_at_max_allocation(
+    org_a: UUID, auth_headers_a: dict[str, str], client: TestClient
+) -> None:
+    employee_a = EmployeeRepository(org_a).create(
+        full_name="Employee A",
+        email="a@example.com",
+        primary_skills=["Python"],
+        current_workload_percent=90,
+        max_allocation_percent=100,
+    )
+    EmployeeRepository(org_a).create(
+        full_name="Employee B",
+        email="b@example.com",
+        primary_skills=["Python"],
+        current_workload_percent=100,
+        max_allocation_percent=100,
+    )
+    body = _allocate_requirement(client, org_a, auth_headers_a, "Python")
+    assert body["assignments"][0]["resource_id"] == str(employee_a.id)
+
+
+def test_primary_skill_outranks_lower_secondary_workload(
+    org_a: UUID, auth_headers_a: dict[str, str], client: TestClient
+) -> None:
+    EmployeeRepository(org_a).create(
+        full_name="Employee A",
+        email="a@example.com",
+        secondary_skills=["Python"],
+        current_workload_percent=20,
+    )
+    employee_b = EmployeeRepository(org_a).create(
+        full_name="Employee B",
+        email="b@example.com",
+        primary_skills=["Python"],
+        current_workload_percent=50,
+    )
+    body = _allocate_requirement(client, org_a, auth_headers_a, "Python")
+    assert body["assignments"][0]["resource_id"] == str(employee_b.id)
+    assert "primary skill match" in body["assignments"][0]["reason"]
+
+
+def test_skill_match_skips_zero_availability(
+    org_a: UUID, auth_headers_a: dict[str, str], client: TestClient
+) -> None:
+    EmployeeRepository(org_a).create(
+        full_name="Employee A",
+        email="a@example.com",
+        primary_skills=["Python"],
+        availability_percent=0,
+        current_workload_percent=10,
+    )
+    employee_b = EmployeeRepository(org_a).create(
+        full_name="Employee B",
+        email="b@example.com",
+        primary_skills=["Python"],
+        availability_percent=80,
+        current_workload_percent=40,
+    )
+    body = _allocate_requirement(client, org_a, auth_headers_a, "Python")
+    assert body["assignments"][0]["resource_id"] == str(employee_b.id)
+
+
+def test_exact_name_beats_better_skill_workload(
+    org_a: UUID, auth_headers_a: dict[str, str], client: TestClient
+) -> None:
+    employee_a = EmployeeRepository(org_a).create(
+        full_name="Employee A",
+        email="a@example.com",
+        primary_skills=["Python"],
+        current_workload_percent=90,
+    )
+    EmployeeRepository(org_a).create(
+        full_name="Employee B",
+        email="b@example.com",
+        primary_skills=["Python"],
+        current_workload_percent=10,
+    )
+    body = _allocate_requirement(client, org_a, auth_headers_a, "Employee A")
+    assignment = body["assignments"][0]
+    assert assignment["resource_id"] == str(employee_a.id)
+    assert assignment["reason"] == "Exact directory match"
+
+
+def _questions(body: dict) -> str:
+    parts = list(body.get("clarifying_questions") or [])
+    parts.extend(item.get("question", "") for item in body.get("unresolved") or [])
+    parts.extend(item.get("message", "") for item in body.get("conflicts") or [])
+    return " ".join(parts)
+
+
+def _pin_at_capacity(org_id: UUID, *keep_ids: UUID) -> None:
+    kept = set(keep_ids)
+    for employee in EmployeeRepository(org_id).list_all():
+        if employee.id in kept:
+            continue
+        employee.current_workload_percent = float(employee.max_allocation_percent)
+
+
+def test_explicit_name_below_max_is_selected(
+    org_a: UUID, auth_headers_a: dict[str, str], client: TestClient
+) -> None:
+    employee = EmployeeRepository(org_a).create(
+        full_name="Capacity Open",
+        email="capacity-open@example.com",
+        current_workload_percent=40,
+        max_allocation_percent=80,
+        availability_percent=100,
+    )
+    body = _allocate_requirement(client, org_a, auth_headers_a, "Capacity Open")
+    assert body["status"] == "resolved"
+    assert body["assignments"][0]["resource_id"] == str(employee.id)
+    assert body["assignments"][0]["reason"] == "Exact directory match"
+
+
+def test_explicit_name_at_max_is_not_replaced(
+    org_a: UUID, auth_headers_a: dict[str, str], client: TestClient
+) -> None:
+    named = EmployeeRepository(org_a).create(
+        full_name="Named Employee",
+        email="named-employee@example.com",
+        current_workload_percent=80,
+        max_allocation_percent=80,
+    )
+    other = EmployeeRepository(org_a).create(
+        full_name="Someone Else",
+        email="someone-else@example.com",
+        primary_skills=["Named Employee"],
+        current_workload_percent=10,
+        max_allocation_percent=100,
+    )
+    body = _allocate_requirement(client, org_a, auth_headers_a, "Named Employee")
+    assigned = {item["resource_id"] for item in body["assignments"]}
+    assert str(named.id) not in assigned
+    assert str(other.id) not in assigned
+    assert body["status"] == "needs_clarification"
+    assert body["unresolved"]
+    assert "Named Employee is at maximum allocation capacity." in _questions(body)
+
+
+def test_exact_email_at_max_is_not_selected(
+    org_a: UUID, auth_headers_a: dict[str, str], client: TestClient
+) -> None:
+    employee = EmployeeRepository(org_a).create(
+        full_name="Mailbox Max",
+        email="mailbox-max@example.com",
+        current_workload_percent=90,
+        max_allocation_percent=90,
+    )
+    body = _allocate_requirement(client, org_a, auth_headers_a, "mailbox-max@example.com")
+    assert str(employee.id) not in {item["resource_id"] for item in body["assignments"]}
+    assert body["status"] == "needs_clarification"
+    assert "Mailbox Max is at maximum allocation capacity." in _questions(body)
+
+
+def test_exact_employee_code_at_max_is_not_selected(
+    org_a: UUID, auth_headers_a: dict[str, str], client: TestClient
+) -> None:
+    employee = EmployeeRepository(org_a).create(
+        full_name="Code Max",
+        email="code-max@example.com",
+        employee_code="CAP-900",
+        current_workload_percent=70,
+        max_allocation_percent=70,
+    )
+    body = _allocate_requirement(client, org_a, auth_headers_a, "CAP-900")
+    assert str(employee.id) not in {item["resource_id"] for item in body["assignments"]}
+    assert body["status"] == "needs_clarification"
+    assert "Code Max is at maximum allocation capacity." in _questions(body)
+
+
+def test_role_match_skips_overloaded_employee(
+    org_a: UUID, auth_headers_a: dict[str, str], client: TestClient
+) -> None:
+    EmployeeRepository(org_a).create(
+        full_name="Role Max",
+        email="role-max@example.com",
+        role_code="workload_clerk",
+        current_workload_percent=80,
+        max_allocation_percent=80,
+    )
+    eligible = EmployeeRepository(org_a).create(
+        full_name="Role Open",
+        email="role-open@example.com",
+        role_code="workload_clerk",
+        current_workload_percent=20,
+        max_allocation_percent=80,
+    )
+    body = _allocate_requirement(client, org_a, auth_headers_a, "workload_clerk")
+    assert body["assignments"][0]["resource_id"] == str(eligible.id)
+
+
+def test_manager_match_skips_overloaded_manager(
+    org_a: UUID, auth_headers_a: dict[str, str], client: TestClient
+) -> None:
+    overloaded = EmployeeRepository(org_a).create(
+        full_name="Overloaded Manager",
+        email="overloaded-manager@example.com",
+        is_manager=True,
+        current_workload_percent=100,
+        max_allocation_percent=100,
+    )
+    eligible = EmployeeRepository(org_a).create(
+        full_name="Eligible Manager",
+        email="eligible-manager@example.com",
+        is_manager=True,
+        current_workload_percent=30,
+        max_allocation_percent=100,
+    )
+    worker = EmployeeRepository(org_a).create(
+        full_name="Capacity Worker",
+        email="capacity-worker@example.com",
+    )
+    EmployeeManagerLinkRepository(org_a).create(
+        employee_id=worker.id,
+        manager_employee_id=overloaded.id,
+    )
+    EmployeeManagerLinkRepository(org_a).create(
+        employee_id=worker.id,
+        manager_employee_id=eligible.id,
+    )
+    plan = ProcessPlan(
+        goal="Manager approval",
+        intent={"goal": "Manager approval", "actors": ["Capacity Worker"]},
+        steps=[
+            ProcessStep(
+                step_id="step_approve",
+                action_type=ActionType.APPROVAL,
+                title="Approve",
+                description="Manager approval",
+                required_resources=["manager"],
+                approval_requirements=["manager"],
+                success_criteria=["Approved"],
+            )
+        ],
+    )
+    process_id, _ = _seed_process_version(org_a, plan.model_dump(mode="json"))
+    response = client.post(
+        f"/v1/processes/{process_id}/allocate",
+        headers=auth_headers_a,
+        json={},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assigned = {item["resource_id"] for item in body["assignments"]}
+    assert str(overloaded.id) not in assigned
+    assert assigned == {str(eligible.id)}
+    assert all(item["data_source"] == "manager_link" for item in body["assignments"])
+
+
+def test_approval_skips_highest_authority_at_max(
+    org_a: UUID, auth_headers_a: dict[str, str], client: TestClient
+) -> None:
+    EmployeeRepository(org_a).create(
+        full_name="High Approver",
+        email="high-approver@example.com",
+        is_manager=True,
+        role_code="manager",
+        approval_authority_limit=1000000,
+        current_workload_percent=100,
+        max_allocation_percent=100,
+    )
+    eligible = EmployeeRepository(org_a).create(
+        full_name="Eligible Approver",
+        email="eligible-approver@example.com",
+        approval_authority_limit=5000,
+        current_workload_percent=40,
+        max_allocation_percent=100,
+    )
+    _pin_at_capacity(org_a, eligible.id)
+    body = _allocate_requirement(client, org_a, auth_headers_a, "approval authority")
+    assert body["assignments"][0]["resource_id"] == str(eligible.id)
+    assert body["assignments"][0]["resource_type"] == "approval_authority"
+
+
+def test_approval_unresolved_when_every_approver_is_at_max(
+    org_a: UUID, auth_headers_a: dict[str, str], client: TestClient
+) -> None:
+    EmployeeRepository(org_a).create(
+        full_name="Blocked High",
+        email="blocked-high@example.com",
+        is_manager=True,
+        role_code="owner",
+        approval_authority_limit=1000000,
+        current_workload_percent=100,
+        max_allocation_percent=100,
+    )
+    EmployeeRepository(org_a).create(
+        full_name="Blocked Low",
+        email="blocked-low@example.com",
+        approval_authority_limit=5000,
+        current_workload_percent=80,
+        max_allocation_percent=80,
+    )
+    _pin_at_capacity(org_a)
+    body = _allocate_requirement(client, org_a, auth_headers_a, "approval authority")
+    assert body["assignments"] == []
+    assert body["status"] == "needs_clarification"
+    assert body["unresolved"]
+    assert "maximum allocation capacity" in _questions(body)
+
+
+def test_skill_ranking_unchanged_when_candidates_are_eligible(
+    org_a: UUID, auth_headers_a: dict[str, str], client: TestClient
+) -> None:
+    EmployeeRepository(org_a).create(
+        full_name="Skill Heavy",
+        email="skill-heavy@example.com",
+        primary_skills=["Python"],
+        current_workload_percent=90,
+        max_allocation_percent=100,
+    )
+    lighter = EmployeeRepository(org_a).create(
+        full_name="Skill Light",
+        email="skill-light@example.com",
+        primary_skills=["Python"],
+        current_workload_percent=30,
+        max_allocation_percent=100,
+    )
+    body = _allocate_requirement(client, org_a, auth_headers_a, "Python")
+    assignment = body["assignments"][0]
+    assert assignment["resource_id"] == str(lighter.id)
+    assert "primary skill match" in assignment["reason"]
+    assert "30%" in assignment["reason"]
+
+
+def test_inactive_employee_stays_ineligible(
+    org_a: UUID, auth_headers_a: dict[str, str], client: TestClient
+) -> None:
+    inactive = EmployeeRepository(org_a).create(
+        full_name="Inactive Named",
+        email="inactive-named@example.com",
+        status="inactive",
+        current_workload_percent=10,
+        max_allocation_percent=100,
+    )
+    other = EmployeeRepository(org_a).create(
+        full_name="Active Substitute",
+        email="active-substitute@example.com",
+        primary_skills=["Inactive Named"],
+        current_workload_percent=10,
+    )
+    body = _allocate_requirement(client, org_a, auth_headers_a, "Inactive Named")
+    assigned = {item["resource_id"] for item in body["assignments"]}
+    assert str(inactive.id) not in assigned
+    assert str(other.id) not in assigned
+    assert any(item["conflict_status"] == "inactive" for item in body["conflicts"])
+
+
+def test_zero_availability_exact_match_is_not_selected(
+    org_a: UUID, auth_headers_a: dict[str, str], client: TestClient
+) -> None:
+    unavailable = EmployeeRepository(org_a).create(
+        full_name="Unavailable Named",
+        email="unavailable-named@example.com",
+        availability_percent=0,
+        current_workload_percent=10,
+        max_allocation_percent=100,
+    )
+    other = EmployeeRepository(org_a).create(
+        full_name="Available Substitute",
+        email="available-substitute@example.com",
+        primary_skills=["Unavailable Named"],
+        availability_percent=100,
+        current_workload_percent=10,
+    )
+    body = _allocate_requirement(client, org_a, auth_headers_a, "Unavailable Named")
+    assigned = {item["resource_id"] for item in body["assignments"]}
+    assert str(unavailable.id) not in assigned
+    assert str(other.id) not in assigned
+    assert body["status"] == "needs_clarification"
+    assert "Unavailable Named is unavailable and cannot be assigned." in _questions(body)
+
+
+def test_employee_below_max_with_availability_stays_eligible(
+    org_a: UUID, auth_headers_a: dict[str, str], client: TestClient
+) -> None:
+    employee = EmployeeRepository(org_a).create(
+        full_name="Ready Person",
+        email="ready-person@example.com",
+        availability_percent=75,
+        current_workload_percent=25,
+        max_allocation_percent=80,
+    )
+    body = _allocate_requirement(client, org_a, auth_headers_a, "Ready Person")
+    assert body["assignments"][0]["resource_id"] == str(employee.id)
+    assert float(employee.availability_percent) > 0
+    assert float(employee.current_workload_percent) < float(employee.max_allocation_percent)

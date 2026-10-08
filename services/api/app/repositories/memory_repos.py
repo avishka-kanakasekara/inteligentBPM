@@ -242,6 +242,11 @@ class EmployeeRepository(TenantRepository):
             "department_id",
             "is_manager",
         }
+        if (
+            kwargs.get("baseline_workload_percent") is None
+            and kwargs.get("current_workload_percent") is not None
+        ):
+            kwargs["baseline_workload_percent"] = kwargs["current_workload_percent"]
         profile = {
             key: value
             for key, value in kwargs.items()
@@ -275,12 +280,13 @@ class EmployeeRepository(TenantRepository):
     def update(self, employee_id: UUID, **fields: Any) -> EmployeeRecord:
         record = self.get(employee_id)
         for key, value in fields.items():
-            if key not in MUTABLE_FIELDS:
+            if key == "current_workload_percent" or key not in MUTABLE_FIELDS:
                 continue
             if value is None and key not in CLEARABLE_FIELDS:
                 continue
             setattr(record, key, value)
         record.updated_at = utcnow()
+        self.store.employees[record.id] = record
         return record
 
 
@@ -988,6 +994,10 @@ class ProcessRepository(TenantRepository):
 
         if get_settings().persistence_mode == "postgres":
             persist_mutation(self.store, "processes", record.id)
+        if status in {"completed", "cancelled"}:
+            from app.services.workload import recompute_organization_workload
+
+            recompute_organization_workload(self.organization_id)
         return record
 
 
@@ -1112,6 +1122,14 @@ class ProcessRunRepository(TenantRepository):
                 "status": status.value,
             }
         )
+        if status in {
+            ProcessRunStatus.COMPLETED,
+            ProcessRunStatus.CANCELLED,
+            ProcessRunStatus.FAILED,
+        }:
+            from app.services.workload import recompute_organization_workload
+
+            recompute_organization_workload(self.organization_id)
         return record
 
     def events(self, run_id: UUID) -> list[dict[str, Any]]:

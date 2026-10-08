@@ -346,8 +346,15 @@ class ExecutionService:
                 run.updated_at = utcnow()
 
         from app.database.persist_helpers import persist_if_postgres
+        from app.services.workload import recompute_organization_workload
 
         persist_if_postgres(self.store, "process_runs", run.id)
+        if run.status in {
+            ProcessRunStatus.COMPLETED,
+            ProcessRunStatus.CANCELLED,
+            ProcessRunStatus.FAILED,
+        }:
+            recompute_organization_workload(self.organization_id)
         self.audit.record(
             organization_id=self.organization_id,
             actor_user_id=user_id,
@@ -442,8 +449,10 @@ class ExecutionService:
         run.pause_reason = reason
         run.updated_at = utcnow()
         from app.database.persist_helpers import persist_if_postgres
+        from app.services.workload import recompute_organization_workload
 
         persist_if_postgres(self.store, "process_runs", run.id)
+        recompute_organization_workload(self.organization_id)
         self.audit.record(
             organization_id=self.organization_id,
             actor_user_id=user_id,

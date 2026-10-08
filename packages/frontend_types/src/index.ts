@@ -356,6 +356,7 @@ export const EmployeeSchema = z.object({
   skill_level: z.enum(["beginner", "intermediate", "expert"]).optional(),
   availability_percent: z.number().optional(),
   weekly_capacity_hours: z.number().optional(),
+  baseline_workload_percent: z.number().optional(),
   current_workload_percent: z.number().optional(),
   cost_per_hour: z.number().nullable().optional(),
   monthly_cost: z.number().nullable().optional(),

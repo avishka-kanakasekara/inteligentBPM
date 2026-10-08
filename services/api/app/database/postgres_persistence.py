@@ -660,6 +660,11 @@ def _employee_from_row(row: EmployeeModel) -> EmployeeRecord:
         weekly_capacity_hours=float(
             40 if row.weekly_capacity_hours is None else row.weekly_capacity_hours
         ),
+        baseline_workload_percent=float(
+            row.current_workload_percent
+            if getattr(row, "baseline_workload_percent", None) is None
+            else row.baseline_workload_percent
+        ),
         current_workload_percent=float(
             row.current_workload_percent if row.current_workload_percent is not None else 0
         ),
@@ -716,6 +721,7 @@ def persist_employee(store: MemoryStore, record: EmployeeRecord) -> None:
                 skill_level=record.skill_level,
                 availability_percent=record.availability_percent,
                 weekly_capacity_hours=record.weekly_capacity_hours,
+                baseline_workload_percent=record.baseline_workload_percent,
                 current_workload_percent=record.current_workload_percent,
                 cost_per_hour=record.cost_per_hour,
                 monthly_cost=record.monthly_cost,

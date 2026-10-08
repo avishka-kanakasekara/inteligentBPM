@@ -465,7 +465,8 @@ def test_employee_workforce_profile_create_and_update(
     )
     assert updated.status_code == 200
     assert updated.json()["team"] == "Operations"
-    assert updated.json()["current_workload_percent"] == 40
+    assert updated.json()["baseline_workload_percent"] == 20
+    assert updated.json()["current_workload_percent"] == 20
     assert updated.json()["employee_code"] == body["employee_code"]
 
     invalid = client.post(
