@@ -568,7 +568,7 @@ export function DiscoveryChatPage() {
               ) : (
                 messages.map((m, idx) => (
                   <div
-                    key={idx}
+                    key={m.id ?? `${m.role}-${idx}`}
                     className={`chat-bubble ${m.role === "assistant" ? "assistant" : "user"}`}
                   >
                     <div style={{ fontSize: "0.75rem", opacity: 0.8, marginBottom: "0.25rem", fontWeight: 600 }}>
