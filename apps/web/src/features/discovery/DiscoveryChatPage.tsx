@@ -636,6 +636,7 @@ export function DiscoveryChatPage() {
                   multiple
                   accept={ACCEPTED_EXTENSIONS.join(",")}
                   disabled={!selectedProcessId || uploading || sendChatMutation.isPending}
+                  aria-describedby={uploadError ? "discovery-upload-error" : undefined}
                   onChange={(e) => void handleFilesSelected(e.target.files)}
                 />
                 <label htmlFor="discovery-document-upload">
@@ -667,7 +668,7 @@ export function DiscoveryChatPage() {
                 </p>
               ) : null}
               {uploadError ? (
-                <p className="chat-upload-error" role="alert">
+                <p id="discovery-upload-error" className="chat-upload-error" role="alert">
                   {uploadError}
                 </p>
               ) : null}
