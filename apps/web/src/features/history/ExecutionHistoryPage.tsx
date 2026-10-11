@@ -1,11 +1,24 @@
 import { useQuery } from "@tanstack/react-query";
+import { ProcessStatusBadge } from "../../components/process/StatusBadges";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { LoadingState } from "../../components/ui/LoadingState";
 import { PageHeader } from "../../components/ui/PageHeader";
 import { RetryState } from "../../components/ui/RetryState";
 import { apiClient } from "../../lib/apiClient";
 import { useOrganization } from "../../providers/OrganizationProvider";
-import { selectHistoryEntries } from "./historyEntries";
+import { isProcessStatus, selectHistoryEntries } from "./historyEntries";
+
+function formatWhen(value?: string | null) {
+  if (!value) return "—";
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      dateStyle: "medium",
+      timeStyle: "short",
+    }).format(new Date(value));
+  } catch {
+    return value;
+  }
+}
 
 export function ExecutionHistoryPage() {
   const { activeOrganization } = useOrganization();
@@ -61,7 +74,32 @@ export function ExecutionHistoryPage() {
         <div className="card-stack">
           {history.map((entry) => (
             <article key={entry.key} className="runs-item process-card">
-              <h2>{entry.title}</h2>
+              <div className="runs-item-head">
+                <div>
+                  <h2>{entry.title}</h2>
+                  <p className="muted tight">
+                    {formatWhen(entry.when)}
+                    {entry.run ? ` · Run ${entry.run.id.slice(0, 8)}` : " · No process run"}
+                  </p>
+                </div>
+                {isProcessStatus(entry.status) ? (
+                  <ProcessStatusBadge status={entry.status} />
+                ) : (
+                  <span className="status-pill">{entry.status}</span>
+                )}
+              </div>
+              <dl className="process-meta">
+                <div>
+                  <dt>Human decision</dt>
+                  <dd>{entry.humanDecision ?? "None recorded"}</dd>
+                </div>
+                {entry.note ? (
+                  <div>
+                    <dt>Note</dt>
+                    <dd>{entry.note}</dd>
+                  </div>
+                ) : null}
+              </dl>
             </article>
           ))}
         </div>
