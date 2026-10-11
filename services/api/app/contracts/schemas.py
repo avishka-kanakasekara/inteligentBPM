@@ -913,6 +913,7 @@ class ProcessSummaryResponse(APIModel):
     name: str
     status: str
     risk_level: str | None = None
+    risk_decision: str | None = None
     approval_status: str | None = None
     execution_status: str | None = None
     missing_information: list[str] = Field(default_factory=list)

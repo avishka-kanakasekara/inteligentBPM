@@ -79,9 +79,13 @@ def _build_process_summary(p: Any, org_id: UUID) -> ProcessSummaryResponse:
     ]
     latest_risk = max(risk_records, key=lambda r: r.updated_at) if risk_records else None
     risk_level = None
+    risk_decision = None
     if latest_risk:
         risk_snap = latest_risk.result_snapshot or {}
         risk_level = _risk_level_from_snapshot(risk_snap)
+        raw_decision = risk_snap.get("decision")
+        if raw_decision:
+            risk_decision = str(raw_decision).upper()
 
     approvals = [
         a
@@ -156,6 +160,7 @@ def _build_process_summary(p: Any, org_id: UUID) -> ProcessSummaryResponse:
         name=p.name,
         status=p.status,
         risk_level=risk_level,
+        risk_decision=risk_decision,
         approval_status=approval_status,
         execution_status=exec_status,
         missing_information=missing_info,
