@@ -1664,6 +1664,16 @@ input[type="checkbox"] {
   color: var(--color-danger);
   font-size: 0.8125rem;
 }
+.discovery-action-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.85rem;
+}
+.discovery-action-error .ghost-btn {
+  flex: none;
+}
 .modal-backdrop {
   position: fixed;
   inset: 0;

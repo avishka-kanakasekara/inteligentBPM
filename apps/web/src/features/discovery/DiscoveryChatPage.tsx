@@ -446,9 +446,12 @@ export function DiscoveryChatPage() {
         ) : null}
 
         {actionError ? (
-          <p className="chat-upload-error" role="alert">
-            {actionError}
-          </p>
+          <div className="chat-upload-error discovery-action-error" role="alert">
+            <span>{actionError}</span>
+            <button type="button" className="ghost-btn" onClick={() => setActionError(null)}>
+              Dismiss
+            </button>
+          </div>
         ) : null}
 
         {showNewModal ? (
