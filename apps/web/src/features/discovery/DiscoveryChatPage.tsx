@@ -209,7 +209,8 @@ export function DiscoveryChatPage() {
         },
       ]);
     },
-    onError: (err) => {
+    onError: (err, variables) => {
+      setInputMessage(variables.text);
       setActionError(discoveryErrorMessage(err, "Could not send the discovery message."));
     },
   });
