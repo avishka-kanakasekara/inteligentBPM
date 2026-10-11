@@ -141,7 +141,7 @@ export function DiscoveryChatPage() {
   });
 
   useEffect(() => {
-    if (chatHistoryQuery.data?.messages) {
+    if (chatHistoryQuery.data?.messages?.length) {
       const mapped: ChatMessage[] = chatHistoryQuery.data.messages.map((m: any) => ({
         id: m.id,
         role: m.role,
