@@ -343,6 +343,7 @@ export function DiscoveryChatPage() {
             type="button"
             onClick={() => {
               setCreateError(null);
+              setNameError(null);
               setShowNewModal(true);
             }}
           >
