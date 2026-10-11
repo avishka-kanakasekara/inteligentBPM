@@ -345,6 +345,7 @@ export function SuppliersPage() {
         ) : null}
 
         {suppliersQuery.data && suppliersQuery.data.items.length > 0 ? (
+          <div className="table-wrap">
           <table className="data-table">
             <thead>
               <tr>
@@ -404,6 +405,7 @@ export function SuppliersPage() {
               ))}
             </tbody>
           </table>
+          </div>
         ) : null}
 
         {canManage ? (

@@ -69,6 +69,13 @@ class Settings(BaseSettings):
             "gcp_application_credentials",
         ),
     )
+    google_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "google_api_key",
+            "gemini_api_key",
+        ),
+    )
 
     gemini_planner_model: str | None = None
     gemini_resource_model: str | None = None
@@ -145,14 +152,27 @@ class Settings(BaseSettings):
             return max(self.rate_limit_per_minute, 10_000)
         return self.rate_limit_per_minute
 
+    def uses_gemini_api_key(self) -> bool:
+        """True when the Gemini Developer API key should be used instead of Vertex ADC."""
+        if not self.google_api_key:
+            return False
+        if not self.google_genai_use_vertexai:
+            return True
+        return not bool(self.google_cloud_project)
+
     def gemini_configured(self) -> bool:
-        return bool(self.google_cloud_project) and bool(
+        has_model = bool(
             self.gemini_planner_model
             or self.gemini_resource_model
             or self.gemini_risk_model
             or self.gemini_execution_model
             or self.gemini_model_id
         )
+        if not has_model:
+            return False
+        if self.google_api_key:
+            return True
+        return bool(self.google_cloud_project)
 
     def missing_required_for_runtime(self) -> list[str]:
         missing: list[str] = []

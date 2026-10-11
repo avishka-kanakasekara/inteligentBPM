@@ -1,4 +1,6 @@
+import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
+import { BrandLogo } from "../brand/BrandLogo";
 import { NotificationCenter } from "../notifications/NotificationCenter";
 import { useAuth } from "../../providers/AuthProvider";
 import { useOrganization } from "../../providers/OrganizationProvider";
@@ -223,20 +225,40 @@ export function AppLayout() {
   const { activeOrganization, can, hasFeature } = useOrganization();
   const location = useLocation();
   const pageTitle = PAGE_TITLES[location.pathname] ?? "Workspace";
+  const [navOpen, setNavOpen] = useState(false);
+
+  useEffect(() => {
+    setNavOpen(false);
+  }, [location.pathname]);
+
+  useEffect(() => {
+    if (!navOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setNavOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [navOpen]);
 
   return (
-    <div className="shell">
+    <div className={navOpen ? "shell nav-open" : "shell"}>
       <a className="skip-link" href="#main-content">
         Skip to content
       </a>
 
-      <nav className="side-nav" aria-label="Primary">
+      {navOpen ? (
+        <button
+          type="button"
+          className="nav-backdrop"
+          aria-label="Close menu"
+          onClick={() => setNavOpen(false)}
+        />
+      ) : null}
+
+      <nav id="primary-nav" className={navOpen ? "side-nav is-open" : "side-nav"} aria-label="Primary">
         <div className="side-brand">
-          <span className="brand-mark" aria-hidden="true" />
-          <div>
-            <div className="brand-name">Intelligent BPM</div>
-            <div className="brand-org">{activeOrganization?.name ?? "No organization"}</div>
-          </div>
+          <BrandLogo />
+          <div className="brand-org">{activeOrganization?.name ?? "No organization"}</div>
         </div>
 
         {NAV_GROUPS.map((group) => (
@@ -283,6 +305,16 @@ export function AppLayout() {
       </nav>
 
       <header className="topbar">
+        <button
+          type="button"
+          className="nav-toggle"
+          aria-expanded={navOpen}
+          aria-controls="primary-nav"
+          onClick={() => setNavOpen((open) => !open)}
+        >
+          <span className="nav-toggle-bars" aria-hidden="true" />
+          {navOpen ? "Close" : "Menu"}
+        </button>
         <div className="topbar-context">
           <div className="breadcrumbs" aria-label="Breadcrumb">
             <span>{activeOrganization?.name ?? "Organization"}</span>

@@ -132,6 +132,7 @@ export function PoliciesDocumentsPage() {
         ) : null}
 
         {policiesQuery.data && policiesQuery.data.items.length > 0 ? (
+          <div className="table-wrap">
           <table className="data-table">
             <thead>
               <tr>
@@ -156,6 +157,7 @@ export function PoliciesDocumentsPage() {
               ))}
             </tbody>
           </table>
+          </div>
         ) : null}
 
         {canManagePolicies ? (
@@ -215,6 +217,7 @@ export function PoliciesDocumentsPage() {
             <EmptyState title="No documents" description="Upload a file to begin ingestion." />
           ) : null}
           {documentsQuery.data && documentsQuery.data.items.length > 0 ? (
+            <div className="table-wrap">
             <table className="data-table">
               <thead>
                 <tr>
@@ -249,6 +252,7 @@ export function PoliciesDocumentsPage() {
                 ))}
               </tbody>
             </table>
+            </div>
           ) : null}
 
           <div className="toolbar">
