@@ -85,6 +85,7 @@ export function DiscoveryChatPage() {
   const [actionNotice, setActionNotice] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
+  const [nameError, setNameError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Load process summaries
@@ -407,12 +408,15 @@ export function DiscoveryChatPage() {
               <form
                 onSubmit={(e) => {
                   e.preventDefault();
-                  if (newProcessName.trim()) {
-                    createProcessMutation.mutate({
-                      name: newProcessName.trim(),
-                      description: newProcessDesc.trim() || undefined,
-                    });
+                  if (!newProcessName.trim()) {
+                    setNameError("Enter a process name.");
+                    return;
                   }
+                  setNameError(null);
+                  createProcessMutation.mutate({
+                    name: newProcessName.trim(),
+                    description: newProcessDesc.trim() || undefined,
+                  });
                 }}
               >
                 <div style={{ marginBottom: "1rem" }}>
@@ -425,9 +429,19 @@ export function DiscoveryChatPage() {
                     required
                     placeholder="e.g. Vendor Onboarding & Purchasing Approval"
                     value={newProcessName}
-                    onChange={(e) => setNewProcessName(e.target.value)}
+                    onChange={(e) => {
+                      setNewProcessName(e.target.value);
+                      if (nameError) setNameError(null);
+                    }}
+                    aria-invalid={Boolean(nameError)}
+                    aria-describedby={nameError ? "new-proc-name-error" : undefined}
                     style={{ width: "100%" }}
                   />
+                  {nameError ? (
+                    <p id="new-proc-name-error" className="chat-upload-error" role="alert">
+                      {nameError}
+                    </p>
+                  ) : null}
                 </div>
                 <div style={{ marginBottom: "1.25rem" }}>
                   <label htmlFor="new-proc-desc" style={{ display: "block", marginBottom: "0.35rem" }}>
