@@ -46,7 +46,7 @@ export function LoginPage() {
   return (
     <AuthShell
       title="Sign in"
-      subtitle="Sign in to allocate resources, review approvals, and execute controlled processes."
+      subtitle="Enter your work email to continue."
       footer={
         <p>
           New here? <Link to="/signup">Create an account</Link>

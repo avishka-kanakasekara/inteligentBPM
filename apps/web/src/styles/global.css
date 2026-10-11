@@ -940,94 +940,35 @@ input[type="checkbox"] {
 }
 .action-meta { color: var(--color-text-tertiary); font-size: 0.75rem; font-weight: 500; }
 
-/* ── Auth split ───────────────────────────────────────────────── */
-.auth-split {
+/* ── Auth screens ─────────────────────────────────────────────── */
+.auth-screen {
   min-height: 100vh;
-  display: grid;
-  grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
-}
-.auth-aside {
-  position: relative;
-  padding: 2.5rem clamp(1.5rem, 4vw, 3.5rem);
-  background:
-    radial-gradient(ellipse 60% 45% at 20% 20%, rgba(47, 91, 218, 0.12), transparent 60%),
-    radial-gradient(ellipse 50% 40% at 80% 80%, rgba(15, 159, 154, 0.1), transparent 55%),
-    linear-gradient(165deg, #e9f0f8 0%, #f4f7fb 55%, #edf3fa 100%);
-  border-right: 1px solid var(--color-border);
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  overflow: hidden;
-}
-.auth-aside-grid {
-  position: absolute;
-  inset: 0;
-  opacity: 0;
-  pointer-events: none;
-}
-.auth-aside-inner { position: relative; z-index: 1; max-width: 28rem; }
-.auth-aside .auth-brand-tag {
-  margin: 0;
-  color: var(--color-primary);
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  font-size: 0.9rem;
-}
-.auth-aside-copy {
-  margin: 1rem 0 0;
-  color: var(--color-text-secondary);
-  line-height: 1.55;
-}
-.workflow-stages {
-  list-style: none;
-  margin: 1.75rem 0 0;
-  padding: 0;
-  display: grid;
-  gap: 0.55rem;
-}
-.workflow-stages li {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 0.75rem;
-  align-items: start;
-  padding: 0.75rem 0.9rem;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  background: rgba(255, 255, 255, 0.75);
-}
-.stage-index {
-  width: 1.6rem;
-  height: 1.6rem;
-  border-radius: 50%;
-  background: var(--color-primary-soft);
-  color: var(--color-primary-active);
+  min-height: 100dvh;
   display: grid;
   place-items: center;
-  font-size: 0.75rem;
-  font-weight: 800;
+  padding: 1.5rem 1rem;
 }
-.stage-title { font-weight: 700; font-size: 0.9rem; }
-.stage-desc { color: var(--color-text-tertiary); font-size: 0.8rem; margin-top: 0.1rem; }
-
-.auth-main {
-  display: grid;
-  place-items: center;
-  padding: 2rem 1.25rem;
-  background: var(--color-canvas);
-}
-.auth-form-plane {
-  width: min(420px, 100%);
-  padding: 1.75rem 1.6rem 1.5rem;
+.auth-card {
+  width: min(440px, 100%);
+  padding: 2rem 1.75rem 1.55rem;
   border: 1px solid var(--color-border);
   background: var(--color-surface);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-md);
 }
-.auth-form-plane h1 { font-size: 1.65rem; }
+.brand-logo-auth {
+  width: min(100%, 210px);
+  margin: 0 auto 1.15rem;
+}
+.auth-card h1 {
+  font-size: 1.7rem;
+  text-align: center;
+}
 .auth-subtitle {
-  margin: 0.4rem 0 0;
+  margin: 0.35rem 0 0;
   color: var(--color-text-secondary);
   line-height: 1.45;
+  text-align: center;
 }
 .auth-form { display: grid; gap: 0.85rem; margin-top: 1.15rem; }
 .auth-field { display: grid; gap: 0.35rem; }
@@ -1076,14 +1017,6 @@ input[type="checkbox"] {
   font-weight: 700;
   text-decoration: underline;
   text-underline-offset: 0.15em;
-}
-.auth-fineprint {
-  margin: 1rem 0 0;
-  text-align: center;
-  color: var(--color-text-tertiary);
-  font-size: 0.78rem;
-  line-height: 1.4;
-  max-width: 420px;
 }
 .auth-banner {
   margin: 0 0 0.85rem;
@@ -2472,8 +2405,6 @@ input[type="checkbox"] {
     margin: 0.25rem auto 1.25rem;
   }
   h1 { font-size: 26px; }
-  .auth-split { grid-template-columns: 1fr; }
-  .auth-aside { border-right: none; border-bottom: 1px solid var(--color-border); padding: 1.75rem 1.25rem; }
   .workspace-split { grid-template-columns: 1fr; }
   .settings-identity {
     grid-template-columns: 1fr;
@@ -2548,18 +2479,12 @@ input[type="checkbox"] {
   .table-wrap .comparison-table {
     min-width: 40rem;
   }
-  .auth-main {
+  .auth-screen {
     padding: 1rem 0.85rem 1.5rem;
     align-items: start;
   }
-  .auth-form-plane {
-    padding: 1.2rem 1rem 1.1rem;
-  }
-  .auth-aside {
-    padding: 1.25rem 1rem 1.1rem;
-  }
-  .workflow-stages {
-    margin-top: 1rem;
+  .auth-card {
+    padding: 1.35rem 1.05rem 1.15rem;
   }
   .auth-stage {
     padding: 1rem 0.75rem;
