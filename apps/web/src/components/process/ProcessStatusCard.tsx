@@ -197,7 +197,13 @@ function summarizeExecution(data: any): string | null {
   return lines.join("\n");
 }
 
-export function ProcessStatusCard({ process }: { process: ProcessSummary }) {
+export function ProcessStatusCard({
+  process,
+  readOnly = false,
+}: {
+  process: ProcessSummary;
+  readOnly?: boolean;
+}) {
   const queryClient = useQueryClient();
   const [busy, setBusy] = useState<ActionKey | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -548,6 +554,7 @@ export function ProcessStatusCard({ process }: { process: ProcessSummary }) {
         </p>
       ) : null}
 
+      {readOnly ? null : (
       <div
         className="card-actions"
         style={{
@@ -633,8 +640,9 @@ export function ProcessStatusCard({ process }: { process: ProcessSummary }) {
           {busy === "execute" ? "Executing…" : "Quick Auto-Run"}
         </button>
       </div>
+      )}
 
-      {openExecutionHub && (
+      {!readOnly && openExecutionHub && (
         <Agent4ExecutionHub
           process={process}
           onClose={() => setOpenExecutionHub(false)}
