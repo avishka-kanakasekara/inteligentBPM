@@ -562,6 +562,11 @@ export function DiscoveryChatPage() {
                     void chatHistoryQuery.refetch();
                   }}
                 />
+              ) : !selectedProcessId ? (
+                <EmptyState
+                  title="No process selected"
+                  description="Create a process to start discovery."
+                />
               ) : (
                 messages.map((m, idx) => (
                   <div
