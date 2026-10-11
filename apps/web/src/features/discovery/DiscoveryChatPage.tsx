@@ -429,7 +429,7 @@ export function DiscoveryChatPage() {
                   documentIds: Array.from(new Set([...sessionDocumentIds, ...pendingDocs.map((d) => d.id)])),
                 })
               }
-              disabled={draftPlanMutation.isPending}
+              disabled={draftPlanMutation.isPending || sendChatMutation.isPending}
             >
               {draftPlanMutation.isPending ? "Drafting plan…" : "Draft plan"}
             </button>
