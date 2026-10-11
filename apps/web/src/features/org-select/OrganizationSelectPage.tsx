@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { BrandLogo } from "../../components/brand/BrandLogo";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { LoadingState } from "../../components/ui/LoadingState";
 import { RetryState } from "../../components/ui/RetryState";
@@ -57,8 +58,7 @@ export function OrganizationSelectPage() {
     <main className="auth-stage org-stage">
       <section className="org-workspace" aria-labelledby="org-title">
         <aside className="org-intro">
-          <span className="brand-mark" aria-hidden="true" />
-          <p className="auth-brand-name">Intelligent BPM</p>
+          <BrandLogo className="brand-logo brand-logo-hero" />
           <h1 id="org-title">Select organization</h1>
           <p className="auth-subtitle">
             Signed in as <strong>{user?.displayName || user?.email}</strong>

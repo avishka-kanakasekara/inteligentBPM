@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
+import { BrandLogo } from "../brand/BrandLogo";
 import { NotificationCenter } from "../notifications/NotificationCenter";
 import { useAuth } from "../../providers/AuthProvider";
 import { useOrganization } from "../../providers/OrganizationProvider";
@@ -256,11 +257,8 @@ export function AppLayout() {
 
       <nav id="primary-nav" className={navOpen ? "side-nav is-open" : "side-nav"} aria-label="Primary">
         <div className="side-brand">
-          <span className="brand-mark" aria-hidden="true" />
-          <div>
-            <div className="brand-name">Intelligent BPM</div>
-            <div className="brand-org">{activeOrganization?.name ?? "No organization"}</div>
-          </div>
+          <BrandLogo />
+          <div className="brand-org">{activeOrganization?.name ?? "No organization"}</div>
         </div>
 
         {NAV_GROUPS.map((group) => (

@@ -238,43 +238,27 @@ h3 { font-size: 16px; font-weight: 700; }
 
 .side-brand {
   display: flex;
-  align-items: center;
-  gap: 0.7rem;
-  padding: 0.35rem 0.55rem 1rem;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.55rem;
+  padding: 0.2rem 0.45rem 1rem;
   border-bottom: 1px solid var(--color-border);
   margin-bottom: 0.85rem;
 }
-.brand-mark {
-  width: 2.15rem;
-  height: 2.15rem;
-  border-radius: 10px;
-  background: var(--gradient-primary);
-  box-shadow: 0 8px 16px rgba(37, 99, 235, 0.28);
-  position: relative;
-  flex-shrink: 0;
+.brand-logo {
+  display: block;
+  width: min(100%, 196px);
+  height: auto;
 }
-.brand-mark::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  margin: auto;
-  width: 0.45rem;
-  height: 0.45rem;
-  border-radius: 50%;
-  background: white;
-}
-.brand-name {
-  font-family: var(--font-display);
-  font-weight: 800;
-  font-size: 0.95rem;
-  color: var(--color-text-primary);
-  line-height: 1.2;
+.brand-logo-hero {
+  width: min(100%, 280px);
+  margin: 0 0 0.35rem;
 }
 .brand-org {
   color: var(--color-text-tertiary);
   font-size: 0.75rem;
   font-weight: 500;
-  max-width: 11rem;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -982,13 +966,6 @@ input[type="checkbox"] {
   pointer-events: none;
 }
 .auth-aside-inner { position: relative; z-index: 1; max-width: 28rem; }
-.auth-aside .auth-brand-name {
-  font-family: var(--font-display);
-  font-size: clamp(2rem, 4vw, 2.6rem);
-  font-weight: 800;
-  margin: 0.75rem 0 0.35rem;
-  color: var(--color-text-primary);
-}
 .auth-aside .auth-brand-tag {
   margin: 0;
   color: var(--color-primary);
@@ -1147,12 +1124,6 @@ input[type="checkbox"] {
   background: var(--color-surface);
   padding: 1.5rem;
   box-shadow: var(--shadow-sm);
-}
-.org-intro .auth-brand-name {
-  font-family: var(--font-display);
-  font-size: 1.5rem;
-  font-weight: 800;
-  margin: 0.5rem 0 0;
 }
 .org-pick-list {
   list-style: none;

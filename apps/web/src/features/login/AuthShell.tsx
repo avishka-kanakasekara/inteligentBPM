@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { BrandLogo } from "../../components/brand/BrandLogo";
 
 type AuthShellProps = {
   children: ReactNode;
@@ -23,8 +24,7 @@ export function AuthShell({ children, title, subtitle, footer }: AuthShellProps)
       <aside className="auth-aside" aria-hidden="false">
         <div className="auth-aside-grid" aria-hidden="true" />
         <div className="auth-aside-inner">
-          <span className="brand-mark" aria-hidden="true" />
-          <p className="auth-brand-name">Intelligent BPM</p>
+          <BrandLogo className="brand-logo brand-logo-hero" />
           <p className="auth-brand-tag">Discover · Allocate · Approve · Execute</p>
           <p className="auth-aside-copy">
             Operational console for process discovery, allocation, risk-backed approval, and
