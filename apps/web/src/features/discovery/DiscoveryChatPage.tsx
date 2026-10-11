@@ -196,6 +196,7 @@ export function DiscoveryChatPage() {
       text: string;
       documentIds: string[];
       attachments: AttachedDocument[];
+      composerText: string;
     }) => apiClient.chatDiscovery(procId, text, documentIds),
     onSuccess: (reply) => {
       setActionError(null);
@@ -218,7 +219,7 @@ export function DiscoveryChatPage() {
         if (last?.role === "user" && last.content === variables.text) next.pop();
         return next;
       });
-      setInputMessage(variables.text);
+      setInputMessage(variables.composerText);
       if (variables.attachments.length > 0) setPendingDocs(variables.attachments);
       setActionError(discoveryErrorMessage(err, "Could not send the discovery message."));
     },
@@ -312,7 +313,7 @@ export function DiscoveryChatPage() {
     setInputMessage("");
     setPendingDocs([]);
     setMessages((prev) => [...prev, { role: "user", content, document_ids: documentIds }]);
-    sendChatMutation.mutate({ procId: selectedProcessId, text: content, documentIds, attachments });
+    sendChatMutation.mutate({ procId: selectedProcessId, text: content, documentIds, attachments, composerText: userText });
   };
 
   useEffect(() => {
