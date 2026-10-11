@@ -90,6 +90,7 @@ export function DiscoveryChatPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const chatLogRef = useRef<HTMLDivElement>(null);
   const messageInputRef = useRef<HTMLInputElement>(null);
+  const processNameInputRef = useRef<HTMLInputElement>(null);
 
   // Load process summaries
   const processesQuery = useQuery({
@@ -315,6 +316,11 @@ export function DiscoveryChatPage() {
     log.scrollTop = log.scrollHeight;
   }, [messages, sendChatMutation.isPending]);
 
+  useEffect(() => {
+    if (!showNewModal) return;
+    processNameInputRef.current?.focus();
+  }, [showNewModal]);
+
   const handleApplyQuestion = (question: string) => {
     setInputMessage(question);
     messageInputRef.current?.focus();
@@ -450,6 +456,7 @@ export function DiscoveryChatPage() {
                     Process Name *
                   </label>
                   <input
+                    ref={processNameInputRef}
                     id="new-proc-name"
                     type="text"
                     required
