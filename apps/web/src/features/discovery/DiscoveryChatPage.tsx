@@ -496,6 +496,17 @@ export function DiscoveryChatPage() {
             <div className="chat-log">
               {chatHistoryQuery.isLoading ? (
                 <LoadingState label="Loading conversation…" />
+              ) : chatHistoryQuery.isError ? (
+                <RetryState
+                  title="Could not load the conversation"
+                  message={discoveryErrorMessage(
+                    chatHistoryQuery.error,
+                    "Discovery history could not be loaded.",
+                  )}
+                  onRetry={() => {
+                    void chatHistoryQuery.refetch();
+                  }}
+                />
               ) : (
                 messages.map((m, idx) => (
                   <div
