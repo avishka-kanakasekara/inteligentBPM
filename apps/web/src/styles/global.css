@@ -843,7 +843,12 @@ input[type="checkbox"] {
 .comparison-table tbody tr:hover { background: var(--color-surface-soft); }
 .data-table tr:last-child td,
 .comparison-table tr:last-child td { border-bottom: none; }
-.table-wrap { overflow-x: auto; margin: 1rem 0; }
+.table-wrap {
+  overflow-x: auto;
+  margin: 1rem 0;
+  max-width: 100%;
+  -webkit-overflow-scrolling: touch;
+}
 
 /* ── Cards / panels ───────────────────────────────────────────── */
 .process-card,
@@ -2558,6 +2563,19 @@ input[type="checkbox"] {
   .page .kpi-band,
   .page .status-grid {
     grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
+  }
+  .toolbar {
+    align-items: stretch;
+  }
+  .toolbar label,
+  .audit-toolbar input {
+    flex: 1 1 100%;
+    min-width: 0;
+    width: 100%;
+  }
+  .table-wrap .data-table,
+  .table-wrap .comparison-table {
+    min-width: 40rem;
   }
 }
 

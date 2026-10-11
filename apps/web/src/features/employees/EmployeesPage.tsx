@@ -372,6 +372,7 @@ export function EmployeesPage() {
           <EmptyState title="No employees" description="Import a CSV or add an employee." />
         ) : null}
         {employeesQuery.data && employeesQuery.data.items.length > 0 ? (
+          <div className="table-wrap">
           <table className="data-table">
             <thead>
               <tr>
@@ -427,6 +428,7 @@ export function EmployeesPage() {
               ))}
             </tbody>
           </table>
+          </div>
         ) : null}
 
         {canManage ? (
