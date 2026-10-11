@@ -99,7 +99,7 @@ export function DiscoveryChatPage() {
     enabled: Boolean(activeOrganization?.id),
   });
 
-  const processes = processesQuery.data ?? [];
+  const processes = useMemo(() => processesQuery.data ?? [], [processesQuery.data]);
 
   const documentsQuery = useQuery({
     queryKey: ["documents", activeOrganization?.id],
