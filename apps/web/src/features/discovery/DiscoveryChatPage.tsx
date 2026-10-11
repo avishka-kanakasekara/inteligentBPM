@@ -342,7 +342,9 @@ export function DiscoveryChatPage() {
         <div className="discovery-toolbar">
           <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", flex: 1, flexWrap: "wrap" }}>
             <label htmlFor="process-selector">Active process</label>
-            {processes.length === 0 ? (
+            {processesQuery.isLoading ? (
+              <LoadingState label="Loading processes…" />
+            ) : processes.length === 0 ? (
               <span className="muted">No processes yet. Create one to begin.</span>
             ) : (
               <select
