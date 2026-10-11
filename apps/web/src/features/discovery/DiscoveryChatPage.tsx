@@ -488,7 +488,15 @@ export function DiscoveryChatPage() {
                   </p>
                 ) : null}
                 <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.5rem" }}>
-                  <button type="button" className="ghost-btn" onClick={() => setShowNewModal(false)}>
+                  <button
+                    type="button"
+                    className="ghost-btn"
+                    onClick={() => {
+                      setShowNewModal(false);
+                      setNameError(null);
+                      setCreateError(null);
+                    }}
+                  >
                     Cancel
                   </button>
                   <button
