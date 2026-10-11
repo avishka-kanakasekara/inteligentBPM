@@ -109,6 +109,28 @@ describe("process and approval rendering", () => {
   });
 });
 
+describe("new account dashboard", () => {
+  it("keeps KPI cards at zero until the new account creates a process", async () => {
+    const user = userEvent.setup();
+    const userId = "cccccccc-cccc-cccc-cccc-cccccccccccc";
+    sessionStore.setUser({
+      id: userId,
+      email: "new@example.com",
+      displayName: "New User",
+    });
+    sessionStore.setToken(`mock-access-token:${userId}`);
+    renderApp("/organizations");
+
+    expect(await screen.findByText(/no organizations yet/i)).toBeInTheDocument();
+    await user.type(screen.getByLabelText(/organization name/i), "New Co");
+    await user.click(screen.getByRole("button", { name: /create & enter/i }));
+
+    expect(await screen.findByRole("heading", { name: /dashboard/i })).toBeInTheDocument();
+    const values = [...document.querySelectorAll(".kpi-value")].map((node) => node.textContent);
+    expect(values).toEqual(["0", "0", "0", "0", "0"]);
+  });
+});
+
 describe("loading and empty states", () => {
   it("renders loading and empty messaging", () => {
     render(

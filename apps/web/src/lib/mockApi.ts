@@ -20,9 +20,85 @@ import type {
   SupplierProduct,
 } from "@bpm/frontend-types";
 import { ApiError } from "./apiClient";
+import { sessionStore } from "./sessionStore";
 
 const ORG_ID = "11111111-1111-1111-1111-111111111111";
 const ORG_B = "22222222-2222-2222-2222-222222222222";
+const DEMO_USER_ID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+const WORKSPACE_KEY = "bpm.mock_workspaces";
+
+type MockWorkspace = {
+  organizations: Organization[];
+  processesByOrg: Record<string, ProcessSummary[]>;
+};
+
+function currentMockUserId(): string {
+  const token = sessionStore.getToken();
+  if (token?.startsWith("mock-access-token:")) {
+    return token.slice("mock-access-token:".length);
+  }
+  return sessionStore.getUser()?.id ?? DEMO_USER_ID;
+}
+
+function isDemoUser(userId = currentMockUserId()): boolean {
+  return userId === DEMO_USER_ID;
+}
+
+function isSeedOrganization(orgId: string | null): boolean {
+  return !orgId || orgId === ORG_ID || orgId === ORG_B;
+}
+
+function readWorkspaces(): Record<string, MockWorkspace> {
+  try {
+    const raw = localStorage.getItem(WORKSPACE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, MockWorkspace>;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function readWorkspace(userId: string): MockWorkspace {
+  const stored = readWorkspaces()[userId];
+  return {
+    organizations: stored?.organizations ?? [],
+    processesByOrg: stored?.processesByOrg ?? {},
+  };
+}
+
+function writeWorkspace(userId: string, workspace: MockWorkspace): void {
+  const all = readWorkspaces();
+  all[userId] = workspace;
+  localStorage.setItem(WORKSPACE_KEY, JSON.stringify(all));
+}
+
+function organizationsForCurrentUser(): Organization[] {
+  if (isDemoUser()) return ORGS;
+  return readWorkspace(currentMockUserId()).organizations;
+}
+
+function processesForCurrentUser(): ProcessSummary[] {
+  const orgId = sessionStore.getOrganizationId();
+  if (isDemoUser() && isSeedOrganization(orgId)) return PROCESSES;
+  if (!orgId) return [];
+  return readWorkspace(currentMockUserId()).processesByOrg[orgId] ?? [];
+}
+
+function rememberProcess(process: ProcessSummary): void {
+  const orgId = sessionStore.getOrganizationId();
+  const userId = currentMockUserId();
+  if (isDemoUser() && isSeedOrganization(orgId)) {
+    PROCESSES.push(process);
+    return;
+  }
+  if (!orgId) return;
+  const workspace = readWorkspace(userId);
+  const list = workspace.processesByOrg[orgId] ?? [];
+  list.push(process);
+  workspace.processesByOrg[orgId] = list;
+  writeWorkspace(userId, workspace);
+}
 
 const ORGS: Organization[] = [
   {
@@ -738,17 +814,25 @@ export const mockApi = {
         checks: [{ name: "mock", ready: true, detail: "mock mode" }],
       } as T;
     }
-    if (path === "/auth/organizations") return ORGS as T;
+    if (path === "/auth/organizations") return organizationsForCurrentUser() as T;
     if (path === "/organizations" && method === "POST") {
+      const demoCreate = isDemoUser();
       const newOrg: Organization = {
-        id: "00000000-0000-0000-0000-000000000099",
+        id: demoCreate ? "00000000-0000-0000-0000-000000000099" : crypto.randomUUID(),
         name: String(body.name || "Acme Corporation"),
         slug: String(body.name || "acme-corp").toLowerCase().replace(/[^a-z0-9]+/g, "-"),
         plan_code: (body.plan_code as Organization["plan_code"]) || "pro",
         status: "active",
         membership_role: "owner",
       };
-      ORGS.push(newOrg);
+      if (demoCreate) {
+        ORGS.push(newOrg);
+      } else {
+        const userId = currentMockUserId();
+        const workspace = readWorkspace(userId);
+        workspace.organizations.push(newOrg);
+        writeWorkspace(userId, workspace);
+      }
       return newOrg as T;
     }
     if (path === "/boom") {
@@ -1205,8 +1289,9 @@ export const mockApi = {
     }
 
     if (path === "/processes" && method === "POST") {
+      const seedProcess = isDemoUser() && isSeedOrganization(sessionStore.getOrganizationId());
       const newProc: ProcessSummary = {
-        id: "00000000-0000-0000-0000-000000000099",
+        id: seedProcess ? "00000000-0000-0000-0000-000000000099" : crypto.randomUUID(),
         name: String(body.name || "New Process"),
         status: "draft",
         risk_level: null,
@@ -1223,13 +1308,13 @@ export const mockApi = {
         has_execution: false,
         updated_at: new Date().toISOString(),
       };
-      PROCESSES.push(newProc);
+      rememberProcess(newProc);
       return newProc as T;
     }
-    if (path === "/processes/summaries") return PROCESSES as T;
+    if (path === "/processes/summaries") return processesForCurrentUser() as T;
     if (path.startsWith("/processes/summaries/")) {
       const id = path.split("/").pop();
-      const found = PROCESSES.find((p) => p.id === id);
+      const found = processesForCurrentUser().find((p) => p.id === id);
       if (!found) {
         throw new ApiError("Process not found", { code: "NOT_FOUND", status: 404 });
       }
@@ -1283,7 +1368,7 @@ export const mockApi = {
     }
     if (path.endsWith("/complete") && method === "POST") {
       const id = path.split("/")[2];
-      const found = PROCESSES.find((p) => p.id === id);
+      const found = processesForCurrentUser().find((p) => p.id === id);
       if (!found) {
         throw new ApiError("Process not found", { code: "NOT_FOUND", status: 404 });
       }
@@ -1297,6 +1382,18 @@ export const mockApi = {
       found.execution_status = "completed";
       found.human_decision = found.human_decision || "Marked complete";
       found.updated_at = new Date().toISOString();
+      if (!PROCESSES.includes(found)) {
+        const orgId = sessionStore.getOrganizationId();
+        if (orgId) {
+          const userId = currentMockUserId();
+          const workspace = readWorkspace(userId);
+          const list = workspace.processesByOrg[orgId] ?? [];
+          const index = list.findIndex((item) => item.id === found.id);
+          if (index >= 0) list[index] = { ...found };
+          workspace.processesByOrg[orgId] = list;
+          writeWorkspace(userId, workspace);
+        }
+      }
       const run = PROCESS_RUNS.find((r) => r.process_id === id);
       if (run && !["completed", "cancelled", "failed"].includes(run.status)) {
         run.status = "completed";
