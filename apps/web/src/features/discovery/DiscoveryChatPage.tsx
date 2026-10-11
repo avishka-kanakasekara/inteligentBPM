@@ -28,6 +28,12 @@ type ChatMessage = {
   };
 };
 
+function discoveryErrorMessage(err: unknown, fallback: string): string {
+  if (err instanceof ApiError) return err.message;
+  if (err instanceof Error && err.message) return err.message;
+  return fallback;
+}
+
 function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -77,6 +83,7 @@ export function DiscoveryChatPage() {
   const [draftedPlan, setDraftedPlan] = useState<DraftedPlan | null>(null);
   const [planConfirmed, setPlanConfirmed] = useState(false);
   const [actionNotice, setActionNotice] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Load process summaries
@@ -179,6 +186,7 @@ export function DiscoveryChatPage() {
       documentIds: string[];
     }) => apiClient.chatDiscovery(procId, text, documentIds),
     onSuccess: (reply) => {
+      setActionError(null);
       setMessages((prev) => [
         ...prev,
         {
@@ -190,6 +198,9 @@ export function DiscoveryChatPage() {
           intent: reply.intent,
         },
       ]);
+    },
+    onError: (err) => {
+      setActionError(discoveryErrorMessage(err, "Could not send the discovery message."));
     },
   });
 
@@ -358,6 +369,12 @@ export function DiscoveryChatPage() {
               Dismiss
             </button>
           </div>
+        ) : null}
+
+        {actionError ? (
+          <p className="chat-upload-error" role="alert">
+            {actionError}
+          </p>
         ) : null}
 
         {showNewModal ? (
