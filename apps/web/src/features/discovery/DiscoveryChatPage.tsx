@@ -330,14 +330,14 @@ export function DiscoveryChatPage() {
   useEffect(() => {
     if (!showNewModal) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
+      if (event.key !== "Escape" || createProcessMutation.isPending) return;
       setShowNewModal(false);
       setNameError(null);
       setCreateError(null);
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [showNewModal]);
+  }, [showNewModal, createProcessMutation.isPending]);
 
   const handleApplyQuestion = (question: string) => {
     setInputMessage(question);
