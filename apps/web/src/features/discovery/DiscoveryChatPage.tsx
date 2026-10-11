@@ -321,6 +321,18 @@ export function DiscoveryChatPage() {
     processNameInputRef.current?.focus();
   }, [showNewModal]);
 
+  useEffect(() => {
+    if (!showNewModal) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setShowNewModal(false);
+      setNameError(null);
+      setCreateError(null);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [showNewModal]);
+
   const handleApplyQuestion = (question: string) => {
     setInputMessage(question);
     messageInputRef.current?.focus();
