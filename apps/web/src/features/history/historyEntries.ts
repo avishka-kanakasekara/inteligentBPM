@@ -1,6 +1,25 @@
-import type { ProcessRun, ProcessSummary } from "@bpm/frontend-types";
+import type { ProcessRun, ProcessStatus, ProcessSummary } from "@bpm/frontend-types";
 
 const TERMINAL_STATUSES = new Set(["completed", "cancelled", "failed", "rejected"]);
+
+export const PROCESS_STATUSES = new Set<ProcessStatus>([
+  "draft",
+  "discovering",
+  "plan_ready",
+  "allocating",
+  "allocated",
+  "analyzing_risk",
+  "risk_complete",
+  "awaiting_approval",
+  "approved",
+  "rejected",
+  "executing",
+  "paused",
+  "blocked",
+  "failed",
+  "completed",
+  "cancelled",
+]);
 
 export type HistoryEntry = {
   key: string;
@@ -16,6 +35,10 @@ export type HistoryEntry = {
 function timestamp(value?: string | null) {
   const time = value ? new Date(value).getTime() : 0;
   return Number.isNaN(time) ? 0 : time;
+}
+
+export function isProcessStatus(status: string): status is ProcessStatus {
+  return PROCESS_STATUSES.has(status as ProcessStatus);
 }
 
 export function selectHistoryEntries(
