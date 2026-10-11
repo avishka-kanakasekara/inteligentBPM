@@ -57,17 +57,19 @@ export function OrganizationSelectPage() {
   return (
     <main className="auth-stage org-stage">
       <section className="org-workspace" aria-labelledby="org-title">
-        <aside className="org-intro">
-          <BrandLogo className="brand-logo brand-logo-hero" />
-          <h1 id="org-title">Select organization</h1>
-          <p className="auth-subtitle">
-            Signed in as <strong>{user?.displayName || user?.email}</strong>
-            {user?.email ? ` · ${user.email}` : ""}. Choose a workspace to continue operations.
-          </p>
-          <button type="button" className="ghost-btn" style={{ marginTop: "1.25rem" }} onClick={() => void handleSignOut()}>
+        <header className="org-header">
+          <BrandLogo variant="mark" className="brand-logo-org" />
+          <div className="org-header-copy">
+            <h1 id="org-title">Select organization</h1>
+            <p className="org-signed-in">
+              Signed in as <strong>{user?.displayName || user?.email}</strong>
+              {user?.email ? ` · ${user.email}` : ""}
+            </p>
+          </div>
+          <button type="button" className="ghost-btn" onClick={() => void handleSignOut()}>
             Sign out
           </button>
-        </aside>
+        </header>
 
         <div className="org-main">
           {organizations.length > 0 ? (
@@ -82,9 +84,9 @@ export function OrganizationSelectPage() {
                       navigate("/dashboard");
                     }}
                   >
-                    <span>
+                    <span className="org-pick-copy">
                       <strong>{org.name}</strong>
-                      <span className="muted tight">
+                      <span className="org-pick-meta">
                         {org.plan_code} · {org.membership_role}
                       </span>
                     </span>
@@ -101,10 +103,8 @@ export function OrganizationSelectPage() {
           )}
 
           <form className="org-create" onSubmit={(e) => void handleCreateOrg(e)}>
-            <h2>Create a company instance</h2>
-            <p className="muted">
-              Sets up a tenant workspace for employees, suppliers, policies, and agent runs.
-            </p>
+            <h2>Create a company</h2>
+            <p className="muted">Add a workspace, then open it.</p>
             {createError ? (
               <p className="field-error" role="alert">
                 {createError}
