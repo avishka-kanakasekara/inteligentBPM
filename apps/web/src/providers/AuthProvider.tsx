@@ -12,6 +12,7 @@ import {
   signInWithPassword,
   signUpWithPassword,
 } from "../lib/supabaseAuth";
+import { findMockAccount, saveMockAccount } from "../lib/mockAccounts";
 import { sessionStore } from "../lib/sessionStore";
 
 export type SignUpOutcome =
@@ -75,8 +76,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
         return;
       }
 
-      // Mock-api / local demo — pairs with backend mock-access-token bypass
-      const nextUser: User = {
+      // Unknown emails stay on the shared demo account. Saved signups keep their own id.
+      const stored = findMockAccount(email);
+      const nextUser: User = stored ?? {
         id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
         email,
         displayName: email.split("@")[0] || "User",
@@ -120,12 +122,13 @@ export function AuthProvider({ children }: AuthProviderProps) {
           return { kind: "signed_in" as const };
         }
 
-        // Mock mode — create a local session immediately
-        const nextUser: User = {
+        const existing = findMockAccount(input.email);
+        const nextUser: User = existing ?? {
           id: crypto.randomUUID(),
           email: input.email,
           displayName: input.fullName || input.email.split("@")[0] || "User",
         };
+        saveMockAccount(nextUser);
         const nextToken = `mock-access-token:${nextUser.id}`;
         applySession(nextUser, nextToken, null);
         setUser(nextUser);

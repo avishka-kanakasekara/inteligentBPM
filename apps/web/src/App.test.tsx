@@ -129,6 +129,25 @@ describe("new account dashboard", () => {
     const values = [...document.querySelectorAll(".kpi-value")].map((node) => node.textContent);
     expect(values).toEqual(["0", "0", "0", "0", "0"]);
   });
+
+  it("keeps a signed-up account empty after signing out and back in", async () => {
+    const user = userEvent.setup();
+    renderApp("/signup");
+
+    await user.type(await screen.findByLabelText(/full name/i), "New User");
+    await user.type(screen.getByLabelText(/work email/i), "new.user@example.com");
+    await user.type(screen.getByLabelText(/^password$/i), "password123");
+    await user.type(screen.getByLabelText(/confirm password/i), "password123");
+    await user.click(screen.getByRole("button", { name: /create account/i }));
+
+    expect(await screen.findByText(/no organizations yet/i)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /sign out/i }));
+
+    await signInAs(user, "new.user@example.com");
+    expect(await screen.findByText(/no organizations yet/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /acme enterprise/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /demo organization/i })).not.toBeInTheDocument();
+  });
 });
 
 describe("loading and empty states", () => {
