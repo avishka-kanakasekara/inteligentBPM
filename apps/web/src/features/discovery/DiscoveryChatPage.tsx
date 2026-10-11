@@ -84,6 +84,7 @@ export function DiscoveryChatPage() {
   const [planConfirmed, setPlanConfirmed] = useState(false);
   const [actionNotice, setActionNotice] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [createError, setCreateError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Load process summaries
@@ -170,7 +171,12 @@ export function DiscoveryChatPage() {
       setDraftedPlan(null);
       setPlanConfirmed(false);
       setPendingDocs([]);
+      setCreateError(null);
+      setActionError(null);
       setActionNotice(`Created process: "${created.name}"`);
+    },
+    onError: (err) => {
+      setCreateError(discoveryErrorMessage(err, "Could not create the process."));
     },
   });
 
@@ -321,7 +327,13 @@ export function DiscoveryChatPage() {
               Interview-driven discovery, dependency extraction, and formal execution plan generation.
             </p>
           </div>
-          <button type="button" onClick={() => setShowNewModal(true)}>
+          <button
+            type="button"
+            onClick={() => {
+              setCreateError(null);
+              setShowNewModal(true);
+            }}
+          >
             Create process
           </button>
         </div>
@@ -430,6 +442,11 @@ export function DiscoveryChatPage() {
                     style={{ width: "100%" }}
                   />
                 </div>
+                {createError ? (
+                  <p className="chat-upload-error" role="alert" style={{ marginBottom: "0.75rem" }}>
+                    {createError}
+                  </p>
+                ) : null}
                 <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.5rem" }}>
                   <button type="button" className="ghost-btn" onClick={() => setShowNewModal(false)}>
                     Cancel
