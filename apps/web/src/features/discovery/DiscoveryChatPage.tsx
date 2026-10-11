@@ -226,9 +226,13 @@ export function DiscoveryChatPage() {
     mutationFn: ({ procId, versionId }: { procId: string; versionId: string }) =>
       apiClient.confirmPlan(procId, versionId),
     onSuccess: () => {
+      setActionError(null);
       setPlanConfirmed(true);
       setActionNotice("Plan confirmed! Ready for Agent 2 (Allocation) and Agent 3 (Risk).");
       void queryClient.invalidateQueries({ queryKey: ["processes"] });
+    },
+    onError: (err) => {
+      setActionError(discoveryErrorMessage(err, "Could not confirm this plan."));
     },
   });
 
