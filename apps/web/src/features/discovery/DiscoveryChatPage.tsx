@@ -143,11 +143,19 @@ export function DiscoveryChatPage() {
 
   useEffect(() => {
     if (chatHistoryQuery.data?.messages?.length) {
-      const mapped: ChatMessage[] = chatHistoryQuery.data.messages.map((m: any) => ({
+      const history = chatHistoryQuery.data.messages as Array<{
+        id?: string;
+        role: "user" | "assistant";
+        content: string;
+        document_ids?: unknown;
+        clarifying_questions?: string[];
+        intent?: ChatMessage["intent"];
+      }>;
+      const mapped: ChatMessage[] = history.map((m) => ({
         id: m.id,
         role: m.role,
         content: m.content,
-        document_ids: Array.isArray(m.document_ids) ? m.document_ids : [],
+        document_ids: Array.isArray(m.document_ids) ? m.document_ids.filter((id): id is string => typeof id === "string") : [],
         clarifying_questions: m.clarifying_questions,
         intent: m.intent,
       }));
