@@ -88,6 +88,7 @@ export function DiscoveryChatPage() {
   const [createError, setCreateError] = useState<string | null>(null);
   const [nameError, setNameError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const chatLogRef = useRef<HTMLDivElement>(null);
 
   // Load process summaries
   const processesQuery = useQuery({
@@ -306,6 +307,12 @@ export function DiscoveryChatPage() {
     sendChatMutation.mutate({ procId: selectedProcessId, text: content, documentIds });
   };
 
+  useEffect(() => {
+    const log = chatLogRef.current;
+    if (!log) return;
+    log.scrollTop = log.scrollHeight;
+  }, [messages, sendChatMutation.isPending]);
+
   const handleApplyQuestion = (question: string) => {
     setInputMessage(question);
   };
@@ -493,7 +500,7 @@ export function DiscoveryChatPage() {
 
         <div className={draftedPlan ? "discovery-grid" : "discovery-grid solo"}>
           <div className="chat-panel">
-            <div className="chat-log">
+            <div className="chat-log" ref={chatLogRef}>
               {chatHistoryQuery.isLoading ? (
                 <LoadingState label="Loading conversation…" />
               ) : chatHistoryQuery.isError ? (
