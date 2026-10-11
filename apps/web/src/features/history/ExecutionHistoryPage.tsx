@@ -1,4 +1,6 @@
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { ProcessStatusCard } from "../../components/process/ProcessStatusCard";
 import { ProcessStatusBadge } from "../../components/process/StatusBadges";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { LoadingState } from "../../components/ui/LoadingState";
@@ -22,6 +24,7 @@ function formatWhen(value?: string | null) {
 
 export function ExecutionHistoryPage() {
   const { activeOrganization } = useOrganization();
+  const [openKey, setOpenKey] = useState<string | null>(null);
   const enabled = Boolean(activeOrganization?.id);
 
   const processesQuery = useQuery({
@@ -72,36 +75,54 @@ export function ExecutionHistoryPage() {
         />
       ) : (
         <div className="card-stack">
-          {history.map((entry) => (
-            <article key={entry.key} className="runs-item process-card">
-              <div className="runs-item-head">
-                <div>
-                  <h2>{entry.title}</h2>
-                  <p className="muted tight">
-                    {formatWhen(entry.when)}
-                    {entry.run ? ` · Run ${entry.run.id.slice(0, 8)}` : " · No process run"}
-                  </p>
-                </div>
-                {isProcessStatus(entry.status) ? (
-                  <ProcessStatusBadge status={entry.status} />
-                ) : (
-                  <span className="status-pill">{entry.status}</span>
-                )}
-              </div>
-              <dl className="process-meta">
-                <div>
-                  <dt>Human decision</dt>
-                  <dd>{entry.humanDecision ?? "None recorded"}</dd>
-                </div>
-                {entry.note ? (
+          {history.map((entry) => {
+            const open = openKey === entry.key;
+            return (
+              <article key={entry.key} className="runs-item process-card">
+                <div className="runs-item-head">
                   <div>
-                    <dt>Note</dt>
-                    <dd>{entry.note}</dd>
+                    <h2>{entry.title}</h2>
+                    <p className="muted tight">
+                      {formatWhen(entry.when)}
+                      {entry.run ? ` · Run ${entry.run.id.slice(0, 8)}` : " · No process run"}
+                    </p>
+                  </div>
+                  {isProcessStatus(entry.status) ? (
+                    <ProcessStatusBadge status={entry.status} />
+                  ) : (
+                    <span className="status-pill">{entry.status}</span>
+                  )}
+                </div>
+                <dl className="process-meta">
+                  <div>
+                    <dt>Human decision</dt>
+                    <dd>{entry.humanDecision ?? "None recorded"}</dd>
+                  </div>
+                  {entry.note ? (
+                    <div>
+                      <dt>Note</dt>
+                      <dd>{entry.note}</dd>
+                    </div>
+                  ) : null}
+                </dl>
+                {entry.process ? (
+                  <div className="runs-item-actions">
+                    <button
+                      type="button"
+                      className="btn ghost-btn"
+                      aria-expanded={open}
+                      onClick={() => setOpenKey(open ? null : entry.key)}
+                    >
+                      {open ? "Hide outcome" : "Show outcome"}
+                    </button>
                   </div>
                 ) : null}
-              </dl>
-            </article>
-          ))}
+                {open && entry.process ? (
+                  <ProcessStatusCard process={entry.process} readOnly />
+                ) : null}
+              </article>
+            );
+          })}
         </div>
       )}
     </section>
