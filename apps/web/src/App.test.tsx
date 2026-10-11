@@ -66,6 +66,7 @@ describe("permission-based visibility", () => {
     expect(await screen.findByRole("heading", { name: /dashboard/i })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /^audit$/i })).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: /^approvals$/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /menu/i })).toHaveAttribute("aria-expanded", "false");
   });
 });
 
