@@ -2547,6 +2547,18 @@ input[type="checkbox"] {
   .chat-upload,
   .chat-composer-row { grid-template-columns: 1fr; }
   .chat-composer-row button { width: 100%; }
+  .attention-list li,
+  .activity-list li,
+  .action-stack a,
+  .action-stack .action-row,
+  .runs-item-head {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .page .kpi-band,
+  .page .status-grid {
+    grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
+  }
 }
 
 @media (max-width: 480px) {
@@ -3380,26 +3392,26 @@ input[type="checkbox"] {
   padding: 1.15rem;
 }
 
-.kpi-band {
+.agent4-hub-container .kpi-band {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 0.65rem;
   margin-bottom: 1rem;
 }
 
-.kpi-band > div {
+.agent4-hub-container .kpi-band > div {
   background: #f8fafc;
   border: 1px solid #e2e8f0;
   border-radius: 12px;
   padding: 0.65rem 0.75rem;
 }
 
-.kpi-band dt {
+.agent4-hub-container .kpi-band dt {
   font-size: 0.7rem;
   color: #64748b;
 }
 
-.kpi-band dd {
+.agent4-hub-container .kpi-band dd {
   margin: 0.2rem 0 0;
   font-size: 1.15rem;
   font-weight: 750;
@@ -3414,7 +3426,7 @@ input[type="checkbox"] {
 
 @media (max-width: 700px) {
   .agent4-intel-grid,
-  .kpi-band {
+  .agent4-hub-container .kpi-band {
     grid-template-columns: 1fr;
   }
 
