@@ -673,7 +673,7 @@ export function DiscoveryChatPage() {
                     (!inputMessage.trim() && pendingDocs.length === 0)
                   }
                 >
-                  Send
+                  {sendChatMutation.isPending ? "Sending…" : "Send"}
                 </button>
               </div>
             </form>
