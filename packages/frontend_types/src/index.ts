@@ -119,6 +119,7 @@ export const ProcessSummarySchema = z.object({
   name: z.string(),
   status: ProcessStatusSchema,
   risk_level: RiskLevelSchema.nullable(),
+  risk_decision: z.string().nullable().optional(),
   approval_status: ApprovalStatusSchema.nullable(),
   execution_status: z.string().nullable(),
   missing_information: z.array(z.string()),
