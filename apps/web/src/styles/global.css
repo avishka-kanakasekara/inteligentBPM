@@ -2474,10 +2474,22 @@ input[type="checkbox"] {
   .side-nav a { white-space: normal; }
   .topbar {
     height: auto;
+    min-height: 64px;
     top: 0;
-    padding: 0.85rem 1rem;
-    flex-wrap: wrap;
+    padding: 0.7rem 0.85rem;
+    flex-wrap: nowrap;
+    gap: 0.65rem;
     border-radius: 18px;
+  }
+  .topbar-org { display: none; }
+  .topbar .session-user { display: none; }
+  .topbar .org-switch-link { display: none; }
+  .breadcrumbs { font-size: 0.75rem; }
+  .breadcrumbs span:first-child {
+    max-width: 8rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .page {
     width: 100%;
@@ -2538,9 +2550,9 @@ input[type="checkbox"] {
 }
 
 @media (max-width: 480px) {
-  .page-header-actions,
-  .topbar-actions { width: 100%; }
-  .topbar-actions { justify-content: flex-start; flex-wrap: wrap; }
+  .page-header-actions { width: 100%; }
+  .topbar-actions { justify-content: flex-end; flex-wrap: nowrap; gap: 0.4rem; }
+  .notification-center summary { padding-inline: 0.55rem; }
   .org-create-row button,
   .auth-submit,
   .page-header-actions .btn,
