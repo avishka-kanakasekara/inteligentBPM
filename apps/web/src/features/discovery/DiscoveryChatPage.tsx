@@ -525,6 +525,7 @@ export function DiscoveryChatPage() {
                       setNameError(null);
                       setCreateError(null);
                     }}
+                    disabled={createProcessMutation.isPending}
                   >
                     Cancel
                   </button>
