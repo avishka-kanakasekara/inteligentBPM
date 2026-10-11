@@ -1576,6 +1576,7 @@ input[type="checkbox"] {
   border-radius: var(--radius-md);
   background: var(--color-surface-soft);
 }
+.chat-upload label { min-width: 0; }
 .chat-upload strong {
   display: block;
   color: var(--color-text-primary);
