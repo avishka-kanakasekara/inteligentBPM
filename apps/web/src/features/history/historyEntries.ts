@@ -23,11 +23,13 @@ export function selectHistoryEntries(
   runs: ProcessRun[],
 ): HistoryEntry[] {
   const byProcess = new Map(processes.map((process) => [process.id, process]));
+  const covered = new Set<string>();
   const entries: HistoryEntry[] = [];
 
   for (const run of runs) {
     if (!TERMINAL_STATUSES.has(run.status)) continue;
     const process = byProcess.get(run.process_id) ?? null;
+    if (process) covered.add(process.id);
     entries.push({
       key: run.id,
       title: process?.name ?? "Process no longer available",
@@ -37,6 +39,24 @@ export function selectHistoryEntries(
       run,
       humanDecision: process?.human_decision ?? null,
       note: run.pause_reason ?? null,
+    });
+  }
+
+  for (const process of processes) {
+    if (covered.has(process.id)) continue;
+    const approval = process.approval_status;
+    const terminalProcess = TERMINAL_STATUSES.has(process.status);
+    const terminalApproval = approval === "rejected" || approval === "cancelled";
+    if (!terminalProcess && !terminalApproval) continue;
+    entries.push({
+      key: process.id,
+      title: process.name,
+      status: terminalProcess ? process.status : (approval ?? process.status),
+      when: process.updated_at,
+      process,
+      run: null,
+      humanDecision: process.human_decision,
+      note: null,
     });
   }
 
