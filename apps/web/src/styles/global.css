@@ -1542,6 +1542,7 @@ input[type="checkbox"] {
   flex-direction: column;
   gap: 0.85rem;
   padding-right: 0.25rem;
+  scroll-behavior: smooth;
 }
 .chat-bubble {
   max-width: 88%;
