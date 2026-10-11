@@ -589,10 +589,10 @@ export function DiscoveryChatPage() {
                   disabled={!selectedProcessId || uploading || sendChatMutation.isPending}
                   onChange={(e) => void handleFilesSelected(e.target.files)}
                 />
-                <div>
+                <label htmlFor="discovery-document-upload">
                   <strong>Upload documents</strong>
                   <p>PDF, Word, Excel, CSV, text, Markdown, or email. Up to 25 MB each.</p>
-                </div>
+                </label>
               </div>
               {pendingDocs.length > 0 ? (
                 <div className="chat-attachments" aria-label="Documents to send">
