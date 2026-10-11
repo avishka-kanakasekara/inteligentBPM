@@ -284,7 +284,6 @@ export function DiscoveryChatPage() {
         const attached = { id: created.id, name: created.file_name || created.title || file.name };
         setPendingDocs((prev) => (prev.some((doc) => doc.id === attached.id) ? prev : [...prev, attached]));
       }
-      void queryClient.invalidateQueries({ queryKey: ["documents"] });
     } catch (err) {
       const message =
         err instanceof ApiError
@@ -296,6 +295,7 @@ export function DiscoveryChatPage() {
     } finally {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
+      void queryClient.invalidateQueries({ queryKey: ["documents"] });
     }
   }
 
