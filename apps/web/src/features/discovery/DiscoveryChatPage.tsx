@@ -211,9 +211,13 @@ export function DiscoveryChatPage() {
     onSuccess: (res) => {
       setDraftedPlan(res);
       setPlanConfirmed(res.status === "confirmed");
+      setActionError(null);
       setActionNotice(
         `Agent 1 drafted plan v${res.version_number} with ${res.plan?.steps?.length || 0} steps.`,
       );
+    },
+    onError: (err) => {
+      setActionError(discoveryErrorMessage(err, "Could not draft a plan."));
     },
   });
 
