@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Request, Response
 
 from app.audit import AuditService
 from app.auth.deps import (
@@ -253,6 +253,28 @@ async def get_process(
 ) -> ProcessResponse:
     record = ProcessRepository(org.organization_id).get(process_id)
     return ProcessResponse.model_validate(record, from_attributes=True)
+
+
+@router.delete("/{process_id}", status_code=204)
+async def delete_process(
+    process_id: UUID,
+    request: Request,
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    org: Annotated[OrganizationContext, Depends(require_permission(perm.PROCESSES_CREATE))],
+) -> Response:
+    """Delete a process and the discovery, plan, allocation, risk, and run data stored with it."""
+    record = ProcessRepository(org.organization_id).get(process_id)
+    ProcessRepository(org.organization_id).delete(process_id)
+    AuditService().record(
+        organization_id=org.organization_id,
+        actor_user_id=user.id,
+        action="process.deleted",
+        resource_type="process",
+        resource_id=record.id,
+        correlation_id=get_correlation_id(request),
+        payload={"name": record.name},
+    )
+    return Response(status_code=204)
 
 
 _TERMINAL_PROCESS_STATUSES = frozenset({"completed", "cancelled"})

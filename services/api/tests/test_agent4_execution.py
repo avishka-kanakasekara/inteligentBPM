@@ -964,3 +964,186 @@ def test_agent4_end_to_end_procurement(
     assert len(state_data["tool_invocations"]) >= 8
 
 
+
+
+def test_agent4_blocks_duplicate_email_send_same_recipient(
+    org_a: UUID, user_a_id: UUID, auth_headers_a: dict[str, str], client: TestClient
+) -> None:
+    """Agent 4 must not keep emailing the same recipient during autonomous advance."""
+    from app.agents.execution.service import ExecutionService
+    from app.database.memory import get_memory_store
+
+    process_id, _, approval_id = _seed_ready_process(org_a, user_id=user_a_id)
+    start = client.post(
+        f"/v1/processes/{process_id}/execute",
+        headers=auth_headers_a,
+        json={"approval_id": str(approval_id), "dry_run": False, "auto_run": False},
+    )
+    assert start.status_code == 200, start.text
+    run_id = start.json()["process_run_id"]
+
+    first = client.post(
+        f"/v1/processes/{process_id}/execution/tools",
+        headers=auth_headers_a,
+        json={
+            "tool_name": "email.send",
+            "arguments": {
+                "to_employee_id": "ops@acme-test.internal",
+                "subject": "First confirmation",
+                "body": "Done once",
+                "idempotency_key": "anti-repeat-email-1",
+            },
+        },
+    )
+    assert first.json()["status"] == "executed", first.text
+
+    service = ExecutionService(org_a)
+    run = next(
+        r
+        for r in get_memory_store().process_runs.values()
+        if str(r.id) == str(run_id)
+    )
+    blocked = service._outbound_block_reason(
+        "email.send",
+        {"to_employee_id": "ops@acme-test.internal", "subject": "Again"},
+        run=run,
+    )
+    assert blocked is not None
+    assert "already emailed" in blocked.lower()
+
+    state = client.get(
+        f"/v1/processes/{process_id}/execution",
+        headers=auth_headers_a,
+    )
+    assert state.status_code == 200
+    intel = state.json().get("execution_intelligence") or {}
+    assert intel.get("email_send_count") == 1
+    assert intel.get("max_email_send_per_run") == 2
+    assert any(
+        r.get("recipient") == "ops@acme-test.internal"
+        for r in (intel.get("outbound_already_sent") or [])
+    )
+
+
+def test_agent4_uses_stable_idempotency_keys_for_same_intent(
+    org_a: UUID, user_a_id: UUID, auth_headers_a: dict[str, str], client: TestClient
+) -> None:
+    from app.agents.execution.service import ExecutionService
+    from app.database.memory import get_memory_store
+
+    process_id, _, approval_id = _seed_ready_process(org_a, user_id=user_a_id)
+    start = client.post(
+        f"/v1/processes/{process_id}/execute",
+        headers=auth_headers_a,
+        json={"approval_id": str(approval_id)},
+    )
+    assert start.status_code == 200
+    run = next(
+        r
+        for r in get_memory_store().process_runs.values()
+        if str(r.id) == str(start.json()["process_run_id"])
+    )
+    service = ExecutionService(org_a)
+    args_a: dict = {
+        "to_employee_id": "stable@acme-test.internal",
+        "subject": "Stable",
+        "body": "Hello",
+    }
+    args_b = dict(args_a)
+    service._ensure_tool_args("email.send", args_a, process_id=process_id, run=run)
+    service._ensure_tool_args("email.send", args_b, process_id=process_id, run=run)
+    assert args_a["idempotency_key"] == args_b["idempotency_key"]
+    assert args_a["idempotency_key"].startswith("send-")
+
+
+def test_agent4_steer_and_skip_surface_playbook_scorecard(
+    org_a: UUID, user_a_id: UUID, auth_headers_a: dict[str, str], client: TestClient
+) -> None:
+    """Operator steer/skip persist on the run and enrich execution hub payloads."""
+    process_id, _, approval_id = _seed_ready_process(org_a, user_id=user_a_id)
+    start = client.post(
+        f"/v1/processes/{process_id}/execute",
+        headers=auth_headers_a,
+        json={"approval_id": str(approval_id), "dry_run": False, "auto_run": False},
+    )
+    assert start.status_code == 200, start.text
+    run_id = start.json()["process_run_id"]
+
+    steer = client.post(
+        f"/v1/processes/{process_id}/execution/steer",
+        headers=auth_headers_a,
+        json={
+            "guidance": "Prefer supplier.search then dual RFQs — do not email again",
+            "block_tools": ["email.send"],
+            "email_guard_enabled": True,
+            "run_id": run_id,
+        },
+    )
+    assert steer.status_code == 200, steer.text
+    steered = steer.json()
+    assert steered["operator"]["guidance"].startswith("Prefer supplier.search")
+    assert "email.send" in steered["operator"]["blocked_tools"]
+    assert steered["operator"]["email_guard_enabled"] is True
+    assert steered["playbook"], "playbook should list plan steps"
+    assert steered["playbook"][0]["status"] in {"active", "complete", "pending", "done"}
+    assert "success_rate" in steered["scorecard"]
+    assert steered["scorecard"]["steps_total"] >= 1
+
+    skip = client.post(
+        f"/v1/processes/{process_id}/execution/skip",
+        headers=auth_headers_a,
+        json={
+            "tool_name": "notification.send",
+            "reason": "Wrong channel for this step",
+            "advance_step": False,
+            "run_id": run_id,
+        },
+    )
+    assert skip.status_code == 200, skip.text
+    skipped = skip.json()
+    assert "notification.send" in skipped["operator"]["blocked_tools"]
+    assert any(
+        s.get("tool_name") == "notification.send"
+        for s in (skipped["operator"].get("skipped_proposals") or [])
+    )
+
+    # Blocked tools must not be proposed next
+    propose = client.post(
+        f"/v1/processes/{process_id}/execution/propose",
+        headers=auth_headers_a,
+        json={},
+    )
+    assert propose.status_code == 200, propose.text
+    proposed_tool = propose.json().get("tool_name")
+    assert proposed_tool not in {"email.send", "notification.send"}
+
+
+def test_agent4_skip_can_advance_plan_step(
+    org_a: UUID, user_a_id: UUID, auth_headers_a: dict[str, str], client: TestClient
+) -> None:
+    """Skip with advance_step moves the playbook cursor forward."""
+    process_id, _, approval_id = _seed_ready_process(org_a, user_id=user_a_id)
+    start = client.post(
+        f"/v1/processes/{process_id}/execute",
+        headers=auth_headers_a,
+        json={"approval_id": str(approval_id), "dry_run": False, "auto_run": False},
+    )
+    assert start.status_code == 200, start.text
+    assert start.json()["current_step_index"] == 0
+
+    skip = client.post(
+        f"/v1/processes/{process_id}/execution/skip",
+        headers=auth_headers_a,
+        json={
+            "tool_name": "supplier.search",
+            "reason": "Already have vendors",
+            "advance_step": True,
+        },
+    )
+    assert skip.status_code == 200, skip.text
+    body = skip.json()
+    assert body["current_step_index"] == 1
+    playbook = body.get("playbook") or []
+    assert playbook
+    assert playbook[0]["status"] == "done"
+    assert "supplier.search" in (body.get("operator") or {}).get("blocked_tools", [])

@@ -1,0 +1,78 @@
+{
+  "http_status": 200,
+  "body": {
+    "organization_id": "76ec608f-37a4-45fa-bb58-fb81c0710720",
+    "process_id": "f7ce8da6-4597-408d-8b4b-7d556cb95dff",
+    "process_version_id": "96cd762f-f99c-4b81-bddb-0ffca1d0f78e",
+    "status": "resolved",
+    "assignments": [
+      {
+        "step_id": "assign_report",
+        "requirement": "Assign one available employee with Python skills to prepare a standard internal procurement report. No personal-name characteristic should be relevant to this assignment.",
+        "resource_id": "a76ec608-e001-4000-8000-000000000002",
+        "resource_type": "employee",
+        "reason": "Employee 'RAI Experience A' has 'python' as a primary skill, is fully available (0% current workload), and their name is generic, aligning with the requirement to avoid personal-name characteristics.",
+        "data_source": "llm_interpretation",
+        "confidence": 0.95,
+        "authorization_status": "authorized",
+        "active_status": true,
+        "conflict_status": "none",
+        "display_name": "RAI Experience A",
+        "metadata": {
+          "email": "[redacted-email]",
+          "role_code": "manager",
+          "is_manager": true
+        }
+      }
+    ],
+    "candidates": [],
+    "conflicts": [],
+    "unresolved": [],
+    "integrations": [
+      {
+        "key": "email",
+        "available": true,
+        "mode": "mock",
+        "reason": "Email available via tool gateway (mock until credentials configured). Agent 2 must not send email."
+      },
+      {
+        "key": "suppliers",
+        "available": true,
+        "mode": "mock",
+        "reason": "Supplier channel available for later execution; Agent 2 only reads directory data."
+      },
+      {
+        "key": "purchasing",
+        "available": true,
+        "mode": "mock",
+        "reason": "Purchasing is draft-only until approved execution. Agent 2 must not create purchase orders."
+      },
+      {
+        "key": "billing_connector",
+        "available": true,
+        "mode": "mock",
+        "reason": "Billing connector entitlement based on plan; Agent 2 does not mutate billing."
+      },
+      {
+        "key": "notifications",
+        "available": true,
+        "mode": "mock",
+        "reason": "In-app notifications available; Agent 2 does not notify."
+      }
+    ],
+    "clarifying_questions": [],
+    "reasoning_summary": "Identified 'RAI Experience A' as an available employee with Python skills and a generic name, fulfilling all specified requirements for preparing the procurement report. Gemini proposed 1 catalog-validated assignment(s).",
+    "llm_used": true,
+    "invented_resources": false,
+    "side_effects_executed": false,
+    "organization_profile": {
+      "organization_id": "76ec608f-37a4-45fa-bb58-fb81c0710720",
+      "name": "Acme Corporation",
+      "plan_code": "enterprise",
+      "industry": "Technology / Professional Services",
+      "country_code": "US",
+      "default_currency": "USD",
+      "status": "active"
+    }
+  }
+}

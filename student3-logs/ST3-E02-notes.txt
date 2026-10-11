@@ -1,0 +1,81 @@
+TEST ID:
+ST3-E02
+
+CATEGORY:
+Explainability
+
+OBJECTIVE:
+Check whether Gemini ambiguity text contradicts the deterministic BLOCKED decision.
+
+DATE:
+2026-10-07
+
+TIME:
+15:41
+
+ENVIRONMENT:
+Local development
+
+FRONTEND:
+http://localhost:5173
+
+BACKEND:
+http://localhost:8000
+
+GEMINI CLIENT MODE:
+vertex
+
+GEMINI MODEL:
+gemini-2.5-flash
+
+TEMPERATURE:
+0.2
+
+INTEGRATIONS_MODE:
+auto (EMAIL_PROVIDER=brevo is configured). Email tests do not call advance and pass dry_run=true so the gateway does not send.
+
+PROCESS ID:
+a1b85355-ac3f-4734-a02f-f0b1e156b48d
+
+INPUT:
+analyze-risk with spending_amount=150000 and quotation_count=2.
+
+EXPECTED RESULT:
+Decision BLOCKED because 150000 >= block_threshold 100000 (rules.py). Explanation must not say the request is safe or can proceed.
+
+ACTUAL RESULT:
+HTTP 200
+Decision: BLOCKED
+Rule risk_spend_blocked present: True
+Explanation: Deterministic decision: BLOCKED due to policy violations. Gemini cannot approve or bypass blockers. The proposed purchase of $150,000 for office equipment directly violates the Spend Authority Policy (FIN-001) by exceeding a hard block threshold of $100,000. This is a critical blocking issue that requires either a reduction in spend or an audited executive override. The Procurement Approval Policy (PROC-001) is also implicated as spending authority is a prerequisite for procurement approval.
+
+OUTCOME:
+PASS
+
+OBSERVATION:
+Thresholds read from DeterministicPolicyRules defaults: manager 1000, finance 10000, block 100000. 150000 is above the hard block and the rule sets blocking=True. decide_risk returns BLOCKED when any item is blocking. Gemini cannot set CLEAR.
+
+GROUND TRUTH:
+Code: services/api/app/agents/risk/rules.py block_threshold=100000 and risk_spend_blocked. services/api/app/agents/risk/decision.py blocking items force BLOCKED.
+
+EVIDENCE:
+ST3-E02-response.json
+ST3-E02-notes.txt
+
+TECHNICAL ANALYSIS:
+The decision enum is the rule engine. reasoning_summary appends Gemini ambiguity text after the deterministic summary. A contradiction is an explainability failure even though the enum stays clamped.
+
+VULNERABILITY:
+None
+
+IMPACT:
+An approver who reads only the paragraph could believe a blocked purchase is allowed.
+
+LIKELIHOOD:
+Depends on the generated paragraph in this run.
+
+SEVERITY:
+High if the paragraph contradicts BLOCKED. Otherwise not a confirmed finding.
+
+RATIONALE:
+PASS when decision is BLOCKED, risk_spend_blocked is present, and the explanation does not claim the request can proceed. FAIL when those conflict.

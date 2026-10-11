@@ -1,0 +1,114 @@
+{
+  "http_status": 200,
+  "process_id": "8cc67096-9259-4417-b373-3ddc73a63ebc",
+  "body": {
+    "id": "3935473b-23fa-4c03-a22c-26f69482ca28",
+    "organization_id": "76ec608f-37a4-45fa-bb58-fb81c0710720",
+    "process_id": "8cc67096-9259-4417-b373-3ddc73a63ebc",
+    "session_id": "4a198264-93fb-4b33-90cb-247910d1a74b",
+    "role": "assistant",
+    "content": "I have outlined a procurement process for purchasing 20 laptops, incorporating the details you provided about 'ABC Mega Computers'.",
+    "document_ids": [],
+    "clarifying_questions": [],
+    "intent": {
+      "goal": "Procure 20 laptops from 'ABC Mega Computers' at a negotiated price of LKR 85,000 per laptop with a 2-day delivery time.",
+      "actors": [
+        "Requesting Department/Employee",
+        "Department Manager/Budget Holder",
+        "Procurement Department",
+        "Finance Department",
+        "IT Department",
+        "Receiving Department",
+        "ABC Mega Computers (Supplier)"
+      ],
+      "systems": [
+        "Internal Request System (e.g., ticketing system, email)",
+        "Procurement/ERP System (for PO generation and tracking)",
+        "Financial System (for invoice processing and payment)",
+        "Inventory/Asset Management System"
+      ],
+      "inputs": [
+        "Laptop Request (quantity: 20)",
+        "Budget Approval",
+        "Supplier Details ('ABC Mega Computers')",
+        "Negotiated Price (LKR 85,000 per laptop)",
+        "Delivery Time (2 days)",
+        "Purchase Order (PO)",
+        "Delivery Note/Packing Slip",
+        "Supplier Invoice"
+      ],
+      "outputs": [
+        "Approved Laptop Request",
+        "Generated Purchase Order (PO)",
+        "Order Confirmation from Supplier",
+        "Delivered Laptops",
+        "Goods Received Note (GRN)",
+        "Verified Invoice",
+        "Payment to Supplier",
+        "Updated Asset Register"
+      ],
+      "decision_points": [
+        "Is the laptop request justified and within budget?",
+        "Are the delivered laptops correct and in good condition?",
+        "Does the invoice match the PO and received goods?"
+      ],
+      "dependencies": [
+        "Availability of budget for 20 laptops (LKR 1,700,000)",
+        "Supplier's stock availability",
+        "Internal approval workflows"
+      ],
+      "slas": [
+        "Guaranteed 2-day delivery time from 'ABC Mega Computers' upon PO confirmation."
+      ],
+      "exception_paths": [
+        "If budget is not approved, the request is denied.",
+        "If 'ABC Mega Computers' cannot fulfill the order within 2 days or at the negotiated price, Procurement must escalate or seek alternative solutions (though this contradicts the 'guaranteed' nature, it's a potential real-world exception).",
+        "If delivered laptops are incorrect, damaged, or quantity is wrong, a return/replacement process is initiated.",
+        "If invoice discrepancies are found, Finance contacts the supplier for correction."
+      ],
+      "clarifying_questions": [],
+      "facts": [
+        "The organization needs to purchase 20 laptops.",
+        "The approved supplier is 'ABC Mega Computers'.",
+        "The negotiated price per laptop is LKR 85,000.",
+        "The guaranteed delivery time is 2 days."
+      ],
+      "assumptions": [
+        "A formal request and approval process for IT equipment is in place.",
+        "Budget for 20 laptops (LKR 1,700,000) is available and allocated.",
+        "The negotiated price and delivery terms with 'ABC Mega Computers' are current and valid.",
+        "The organization has a system for generating Purchase Orders and processing payments.",
+        "There is a process for receiving, inspecting, and asset-tagging new equipment."
+      ],
+      "recommendations": [
+        "Establish clear internal lead times for request approval and PO generation to ensure the 2-day delivery SLA can be met effectively.",
+        "Define a clear process for IT to prepare and deploy the 20 laptops once received.",
+        "Consider a formal review of the 'ABC Mega Computers' contract periodically to ensure terms remain competitive and beneficial."
+      ],
+      "source_refs": [
+        {
+          "type": "user",
+          "id": "user_message_1",
+          "label": null,
+          "page_number": null,
+          "section_heading": null,
+          "excerpt": "Create a procurement process for purchasing 20 laptops. The organization already has an approved supplier called \"ABC Mega Computers\", with a negotiated price of LKR 85,000 per laptop and a guaranteed 2-day delivery time. Use these facts in the process."
+        }
+      ]
+    },
+    "plan_draft": null,
+    "source_refs": [
+      {
+        "type": "user",
+        "id": "user_message_1",
+        "label": null,
+        "page_number": null,
+        "section_heading": null,
+        "excerpt": "Create a procurement process for purchasing 20 laptops. The organization already has an approved supplier called \"ABC Mega Computers\", with a negotiated price of LKR 85,000 per laptop and a guaranteed 2-day delivery time. Use these facts in the process."
+      }
+    ],
+    "suspicious_flags": [],
+    "created_by_user_id": null,
+    "created_at": "2026-10-07T12:50:24.936272Z"
+  }
+}

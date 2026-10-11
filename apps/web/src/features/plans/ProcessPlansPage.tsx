@@ -40,11 +40,15 @@ function formatWhen(value: string) {
 function PlanCard({
   process,
   onComplete,
+  onDelete,
   completing,
+  deleting,
 }: {
   process: ProcessSummary;
   onComplete: (process: ProcessSummary) => void;
+  onDelete: (process: ProcessSummary) => void;
   completing: boolean;
+  deleting: boolean;
 }) {
   const canComplete = COMPLETABLE.has(process.status);
   const isComplete = process.status === "completed";
@@ -106,6 +110,14 @@ function PlanCard({
         <Link to="/runs" className="btn ghost-btn">
           Active runs
         </Link>
+        <button
+          type="button"
+          className="btn btn-danger"
+          disabled={deleting}
+          onClick={() => onDelete(process)}
+        >
+          {deleting ? "Deleting…" : "Delete process"}
+        </button>
         {isComplete ? (
           <span className="status-pill tone-success">Project complete</span>
         ) : canComplete ? (
@@ -134,6 +146,18 @@ export function ProcessPlansPage() {
     enabled: Boolean(activeOrganization?.id),
   });
 
+  const deleteMutation = useMutation({
+    mutationFn: (processId: string) => apiClient.deleteProcess(processId),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["process-plans"] }),
+        queryClient.invalidateQueries({ queryKey: ["processes"] }),
+        queryClient.invalidateQueries({ queryKey: ["active-runs"] }),
+        queryClient.invalidateQueries({ queryKey: ["history"] }),
+      ]);
+    },
+  });
+
   const completeMutation = useMutation({
     mutationFn: (processId: string) => apiClient.completeProcess(processId),
     onSuccess: async () => {
@@ -157,6 +181,10 @@ export function ProcessPlansPage() {
     completeMutation.isPending && typeof completeMutation.variables === "string"
       ? completeMutation.variables
       : null;
+  const deletingId =
+    deleteMutation.isPending && typeof deleteMutation.variables === "string"
+      ? deleteMutation.variables
+      : null;
 
   return (
     <section className="plans-page">
@@ -178,6 +206,13 @@ export function ProcessPlansPage() {
             : completeMutation.error.message}
         </p>
       ) : null}
+      {deleteMutation.isError ? (
+        <p className="inline-notice is-error" role="alert">
+          {deleteMutation.error instanceof ApiError
+            ? deleteMutation.error.message
+            : deleteMutation.error.message}
+        </p>
+      ) : null}
 
       {items.length === 0 ? (
         <EmptyState title="No plans" description="Create a plan from discovery chat." />
@@ -188,6 +223,7 @@ export function ProcessPlansPage() {
               key={process.id}
               process={process}
               completing={completingId === process.id}
+              deleting={deletingId === process.id}
               onComplete={(item) => {
                 if (
                   !window.confirm(
@@ -197,6 +233,16 @@ export function ProcessPlansPage() {
                   return;
                 }
                 completeMutation.mutate(item.id);
+              }}
+              onDelete={(item) => {
+                if (
+                  !window.confirm(
+                    `Delete "${item.name}"? The discovery chat, plan, and any runs for this process will be removed.`,
+                  )
+                ) {
+                  return;
+                }
+                deleteMutation.mutate(item.id);
               }}
             />
           ))}
