@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { LoadingState } from "../../components/ui/LoadingState";
+import { RetryState } from "../../components/ui/RetryState";
 import { RequireFeature } from "../../components/RouteGuards";
 import { ApiError, apiClient } from "../../lib/apiClient";
 import { useOrganization } from "../../providers/OrganizationProvider";
@@ -344,6 +345,17 @@ export function DiscoveryChatPage() {
             <label htmlFor="process-selector">Active process</label>
             {processesQuery.isLoading ? (
               <LoadingState label="Loading processes…" />
+            ) : processesQuery.isError ? (
+              <RetryState
+                title="Could not load processes"
+                message={discoveryErrorMessage(
+                  processesQuery.error,
+                  "The process list could not be loaded.",
+                )}
+                onRetry={() => {
+                  void processesQuery.refetch();
+                }}
+              />
             ) : processes.length === 0 ? (
               <span className="muted">No processes yet. Create one to begin.</span>
             ) : (
