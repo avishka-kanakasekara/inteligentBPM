@@ -541,7 +541,13 @@ export function DiscoveryChatPage() {
 
         <div className={draftedPlan ? "discovery-grid" : "discovery-grid solo"}>
           <div className="chat-panel">
-            <div className="chat-log" ref={chatLogRef} aria-busy={sendChatMutation.isPending}>
+            <div
+              className="chat-log"
+              ref={chatLogRef}
+              role="log"
+              aria-label="Discovery conversation"
+              aria-busy={sendChatMutation.isPending}
+            >
               {chatHistoryQuery.isLoading ? (
                 <LoadingState label="Loading conversation…" />
               ) : chatHistoryQuery.isError ? (
