@@ -2577,6 +2577,37 @@ input[type="checkbox"] {
   .table-wrap .comparison-table {
     min-width: 40rem;
   }
+  .auth-main {
+    padding: 1rem 0.85rem 1.5rem;
+    align-items: start;
+  }
+  .auth-form-plane {
+    padding: 1.2rem 1rem 1.1rem;
+  }
+  .auth-aside {
+    padding: 1.25rem 1rem 1.1rem;
+  }
+  .workflow-stages {
+    margin-top: 1rem;
+  }
+  .auth-stage {
+    padding: 1rem 0.75rem;
+    align-items: start;
+  }
+  .org-intro,
+  .org-main {
+    padding: 1.1rem;
+  }
+  .org-pick {
+    align-items: flex-start;
+    text-align: left;
+    gap: 0.65rem;
+  }
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
 }
 
 @media (max-width: 480px) {
