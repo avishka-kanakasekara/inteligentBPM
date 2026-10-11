@@ -2476,6 +2476,7 @@ input[type="checkbox"] {
   .audit-count { margin-left: 0; }
   .chat-upload,
   .chat-composer-row { grid-template-columns: 1fr; }
+  .chat-upload { grid-template-columns: 1fr; }
   .chat-composer-row button { width: 100%; }
 }
 
