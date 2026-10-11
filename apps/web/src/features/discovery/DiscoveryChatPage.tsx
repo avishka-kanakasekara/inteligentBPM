@@ -211,6 +211,12 @@ export function DiscoveryChatPage() {
       ]);
     },
     onError: (err, variables) => {
+      setMessages((prev) => {
+        const next = [...prev];
+        const last = next[next.length - 1];
+        if (last?.role === "user" && last.content === variables.text) next.pop();
+        return next;
+      });
       setInputMessage(variables.text);
       setActionError(discoveryErrorMessage(err, "Could not send the discovery message."));
     },
