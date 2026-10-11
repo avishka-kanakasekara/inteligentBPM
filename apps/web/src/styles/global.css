@@ -2492,6 +2492,7 @@ input[type="checkbox"] {
 }
 
 @media (max-width: 480px) {
+  .discovery-header > button { width: 100%; }
   .page-header-actions,
   .topbar-actions { width: 100%; }
   .topbar-actions { justify-content: flex-start; flex-wrap: wrap; }
