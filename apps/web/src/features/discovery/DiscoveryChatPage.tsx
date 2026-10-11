@@ -262,7 +262,6 @@ export function DiscoveryChatPage() {
     const files = Array.from(fileList);
     setUploading(true);
     try {
-      const uploaded: AttachedDocument[] = [];
       for (const file of files) {
         const ext = file.name.includes(".")
           ? file.name.slice(file.name.lastIndexOf(".")).toLowerCase()
@@ -281,12 +280,9 @@ export function DiscoveryChatPage() {
           mime_type: file.type || undefined,
           document_type: "discovery",
         });
-        uploaded.push({ id: created.id, name: created.file_name || created.title || file.name });
+        const attached = { id: created.id, name: created.file_name || created.title || file.name };
+        setPendingDocs((prev) => (prev.some((doc) => doc.id === attached.id) ? prev : [...prev, attached]));
       }
-      setPendingDocs((prev) => {
-        const seen = new Set(prev.map((doc) => doc.id));
-        return [...prev, ...uploaded.filter((doc) => !seen.has(doc.id))];
-      });
       void queryClient.invalidateQueries({ queryKey: ["documents"] });
     } catch (err) {
       const message =
