@@ -89,6 +89,7 @@ export function DiscoveryChatPage() {
   const [nameError, setNameError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const chatLogRef = useRef<HTMLDivElement>(null);
+  const messageInputRef = useRef<HTMLInputElement>(null);
 
   // Load process summaries
   const processesQuery = useQuery({
@@ -315,6 +316,7 @@ export function DiscoveryChatPage() {
 
   const handleApplyQuestion = (question: string) => {
     setInputMessage(question);
+    messageInputRef.current?.focus();
   };
 
   return (
@@ -627,6 +629,7 @@ export function DiscoveryChatPage() {
                       : "Select or create a process first…"
                   }
                   disabled={!selectedProcessId || sendChatMutation.isPending || uploading}
+                  ref={messageInputRef}
                   value={inputMessage}
                   onChange={(e) => setInputMessage(e.target.value)}
                   aria-label="Discovery message"
