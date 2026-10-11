@@ -144,7 +144,7 @@ export function DiscoveryChatPage() {
         {
           role: "assistant",
           content:
-            "I am Agent 1 (Process Discovery powered by Gemini). Describe the business process you want to automate. I will interview you to uncover requirements, detect missing dependencies, and generate a complete execution plan.",
+            "I am Agent 1 (Process Discovery). Describe the business process you want to automate. I will ask what is missing and draft an execution plan. Vertex Gemini is used only when a Google Cloud project and model are configured.",
         },
       ]);
     }
@@ -201,7 +201,7 @@ export function DiscoveryChatPage() {
       setDraftedPlan(res);
       setPlanConfirmed(res.status === "confirmed");
       setActionNotice(
-        `Agent 1 drafted plan v${res.version_number} with ${res.plan?.steps?.length || 0} steps via Vertex Gemini.`,
+        `Agent 1 drafted plan v${res.version_number} with ${res.plan?.steps?.length || 0} steps.`,
       );
     },
   });
