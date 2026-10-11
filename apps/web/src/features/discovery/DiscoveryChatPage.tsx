@@ -465,7 +465,10 @@ export function DiscoveryChatPage() {
                   <button type="button" className="ghost-btn" onClick={() => setShowNewModal(false)}>
                     Cancel
                   </button>
-                  <button type="submit" disabled={createProcessMutation.isPending}>
+                  <button
+                    type="submit"
+                    disabled={createProcessMutation.isPending || !newProcessName.trim()}
+                  >
                     {createProcessMutation.isPending ? "Creating…" : "Create process"}
                   </button>
                 </div>
