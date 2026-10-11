@@ -1172,6 +1172,21 @@ class ExecutionControlRequest(APIModel):
     run_id: UUID | None = None
 
 
+class ExecutionSteerRequest(APIModel):
+    guidance: str = ""
+    block_tools: list[str] = Field(default_factory=list)
+    unblock_tools: list[str] = Field(default_factory=list)
+    email_guard_enabled: bool | None = None
+    run_id: UUID | None = None
+
+
+class ExecutionSkipRequest(APIModel):
+    tool_name: str
+    reason: str | None = None
+    advance_step: bool = False
+    run_id: UUID | None = None
+
+
 class ExecutionStateResponse(APIModel):
     process_id: UUID
     process_run_id: UUID
@@ -1191,6 +1206,11 @@ class ExecutionStateResponse(APIModel):
     calendar_events: list[dict[str, Any]] = Field(default_factory=list)
     tasks: list[dict[str, Any]] = Field(default_factory=list)
     notifications: list[dict[str, Any]] = Field(default_factory=list)
+    execution_intelligence: dict[str, Any] = Field(default_factory=dict)
+    playbook: list[dict[str, Any]] = Field(default_factory=list)
+    scorecard: dict[str, Any] = Field(default_factory=dict)
+    operator: dict[str, Any] = Field(default_factory=dict)
+    agent_activity: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ExecutionReportResponse(APIModel):

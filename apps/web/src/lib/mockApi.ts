@@ -1220,6 +1220,16 @@ export const mockApi = {
       return { created_ids, created_count: created_ids.length } satisfies ImportCommit as T;
     }
 
+    const deleteProcessMatch = path.match(/^\/processes\/([^/]+)$/);
+    if (deleteProcessMatch && method === "DELETE") {
+      const id = deleteProcessMatch[1];
+      const index = PROCESSES.findIndex((item) => item.id === id);
+      if (index < 0) {
+        throw new ApiError("Process not found", { code: "NOT_FOUND", status: 404 });
+      }
+      PROCESSES.splice(index, 1);
+      return undefined as T;
+    }
     if (path === "/processes" && method === "POST") {
       const newProc: ProcessSummary = {
         id: "00000000-0000-0000-0000-000000000099",
@@ -1379,6 +1389,348 @@ export const mockApi = {
       return {
         items: items.slice(offset, offset + limit),
         meta: { total: items.length, limit, offset },
+      } as T;
+    }
+
+    // ── Agent 4 execution hub (mock) ─────────────────────────────
+    const pathNoQuery = path.split("?")[0];
+    const execMatch = pathNoQuery.match(/^\/processes\/([^/]+)\/execution(.*)$/);
+    if (execMatch) {
+      const processId = execMatch[1];
+      const rest = execMatch[2] || "";
+      const foundRun = PROCESS_RUNS.find((r) => r.process_id === processId);
+      const emptyState = {
+        process_id: processId,
+        process_run_id: "00000000-0000-0000-0000-000000000000",
+        status: "not_run",
+        dry_run: false,
+        current_step_index: 0,
+        pause_reason: "Agent 4 has not been run yet.",
+        tool_invocations: [] as unknown[],
+        human_checkpoints: [] as string[],
+        stop_conditions: [] as string[],
+        available_tools: ["supplier.search", "email.send", "notification.send", "document.generate"],
+        email_outbox: [] as unknown[],
+        generated_documents: [] as unknown[],
+        calendar_events: [] as unknown[],
+        tasks: [] as unknown[],
+        notifications: [] as unknown[],
+        execution_intelligence: {
+          executed_tools: [],
+          outbound_already_sent: [],
+          step_checklist: { complete: false, step_kind: "general", remaining: [] },
+          email_send_count: 0,
+          max_email_send_per_run: 2,
+          plan_step_count: 1,
+          current_step_title: "Ready",
+        },
+        playbook: [
+          {
+            index: 0,
+            title: "Execute plan",
+            description: "Run controlled tools for this process",
+            status: "pending",
+            step_kind: "general",
+            remaining: [],
+            allowed_tools: ["supplier.search", "email.send"],
+          },
+        ],
+        scorecard: { tools_total: 0, tools_successful: 0, success_rate: 0, steps_total: 1, steps_completed: 0 },
+        operator: {
+          guidance: "",
+          blocked_tools: [],
+          skipped_proposals: [],
+          guidance_history: [],
+          email_guard_enabled: true,
+          stuck_strikes: 0,
+        },
+      };
+
+      const liveState = () => {
+        if (!foundRun) return emptyState;
+        return {
+          ...emptyState,
+          process_run_id: foundRun.id,
+          status: foundRun.status === "executing" ? "executing" : foundRun.status === "blocked" ? "paused" : foundRun.status,
+          current_step_index: foundRun.current_step_index ?? 0,
+          pause_reason: foundRun.pause_reason,
+          dry_run: foundRun.dry_run ?? false,
+          tool_invocations:
+            foundRun.status === "executing" || foundRun.status === "completed"
+              ? [
+                  {
+                    id: "mock-inv-1",
+                    tool_name: "supplier.search",
+                    status: "executed",
+                    created_at: new Date().toISOString(),
+                    result: { data: { query: "Hardware" } },
+                  },
+                  {
+                    id: "mock-inv-2",
+                    tool_name: "notification.send",
+                    status: "executed",
+                    created_at: new Date().toISOString(),
+                    result: { data: { title: "Update" } },
+                  },
+                ]
+              : [],
+          playbook: [
+            {
+              index: 0,
+              title: "Search & notify",
+              description: "Find suppliers and notify stakeholders",
+              status: "active",
+              step_kind: "procure",
+              remaining: ["supplier.request_quote"],
+              allowed_tools: ["supplier.search", "supplier.request_quote", "email.send"],
+            },
+          ],
+          scorecard: {
+            tools_total: 2,
+            tools_successful: 2,
+            tools_failed_or_denied: 0,
+            success_rate: 100,
+            steps_total: 1,
+            steps_completed: 0,
+            quotes_requested: 0,
+            purchase_orders_submitted: 0,
+            documents: 0,
+          },
+          execution_intelligence: {
+            ...emptyState.execution_intelligence,
+            executed_tools: ["supplier.search", "notification.send"],
+            plan_step_count: 1,
+            current_step_title: "Search & notify",
+            step_checklist: {
+              complete: false,
+              step_kind: "procure",
+              remaining: ["supplier.request_quote"],
+            },
+          },
+        };
+      };
+
+      if (rest === "" && method === "GET") {
+        return liveState() as T;
+      }
+      if (rest === "/report" && method === "GET") {
+        const state = liveState();
+        return {
+          process_id: processId,
+          process_name: PROCESSES.find((p) => p.id === processId)?.name || "Process",
+          process_run_id: state.process_run_id,
+          status: state.status,
+          dry_run: false,
+          plan_goal: "Mock execution report",
+          steps_total: 1,
+          steps_completed: state.current_step_index,
+          tools_invoked_total: state.tool_invocations.length,
+          tools_successful: state.tool_invocations.length,
+          tools_failed: 0,
+          generated_documents_count: 0,
+          emails_count: 0,
+          calendar_events_count: 0,
+          tasks_count: 0,
+          notifications_count: 0,
+          invocations: state.tool_invocations,
+          generated_at: new Date().toISOString(),
+        } as T;
+      }
+      if ((rest === "" || rest === "/advance") && method === "POST") {
+        let run = foundRun;
+        if (!run) {
+          run = {
+            id: crypto.randomUUID(),
+            organization_id: ORG_ID,
+            process_id: processId,
+            process_version_id: null,
+            status: "executing",
+            initiated_by_user_id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            correlation_id: "corr-mock-exec",
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+            dry_run: false,
+            current_step_index: 0,
+            pause_reason: null,
+          };
+          PROCESS_RUNS.push(run);
+        } else {
+          run.status = "executing";
+          run.current_step_index = Math.min((run.current_step_index ?? 0) + 1, 3);
+          run.updated_at = new Date().toISOString();
+        }
+        const proc = PROCESSES.find((p) => p.id === processId);
+        if (proc) {
+          proc.has_execution = true;
+          proc.execution_status = "invoking_tool";
+          proc.updated_at = new Date().toISOString();
+        }
+        return liveState() as T;
+      }
+      if (rest === "/pause" && method === "POST") {
+        if (foundRun) {
+          foundRun.status = "paused";
+          foundRun.pause_reason = "Paused by operator";
+          foundRun.updated_at = new Date().toISOString();
+        }
+        return liveState() as T;
+      }
+      if (rest === "/resume" && method === "POST") {
+        if (foundRun) {
+          foundRun.status = "executing";
+          foundRun.pause_reason = null;
+          foundRun.updated_at = new Date().toISOString();
+        }
+        return liveState() as T;
+      }
+      if (rest === "/cancel" && method === "POST") {
+        if (foundRun) {
+          foundRun.status = "cancelled";
+          foundRun.updated_at = new Date().toISOString();
+        }
+        return liveState() as T;
+      }
+      if (rest === "/reset" && method === "POST") {
+        if (foundRun) {
+          foundRun.status = "draft";
+          foundRun.current_step_index = 0;
+          foundRun.pause_reason = null;
+          foundRun.updated_at = new Date().toISOString();
+        }
+        return liveState() as T;
+      }
+      if (rest === "/steer" && method === "POST") {
+        const state = liveState() as any;
+        if (body.guidance) state.operator.guidance = String(body.guidance);
+        if (Array.isArray(body.block_tools)) {
+          state.operator.blocked_tools = [
+            ...new Set([...(state.operator.blocked_tools || []), ...body.block_tools]),
+          ];
+        }
+        if (typeof body.email_guard_enabled === "boolean") {
+          state.operator.email_guard_enabled = body.email_guard_enabled;
+        }
+        return state as T;
+      }
+      if (rest === "/skip" && method === "POST") {
+        const state = liveState() as any;
+        state.operator.skipped_proposals = [
+          ...(state.operator.skipped_proposals || []),
+          { tool_name: body.tool_name, reason: body.reason || "skipped", at: new Date().toISOString() },
+        ];
+        if (body.tool_name) {
+          state.operator.blocked_tools = [
+            ...new Set([...(state.operator.blocked_tools || []), String(body.tool_name)]),
+          ];
+        }
+        if (body.advance_step && foundRun) {
+          foundRun.current_step_index = (foundRun.current_step_index ?? 0) + 1;
+        }
+        return state as T;
+      }
+      if (rest === "/tools" && method === "POST") {
+        return {
+          id: crypto.randomUUID(),
+          tool_name: body.tool_name,
+          status: "executed",
+          arguments: body.arguments || {},
+          result: { ok: true, data: body.arguments || {}, mock: true },
+          created_at: new Date().toISOString(),
+        } as T;
+      }
+      if (rest.startsWith("/propose") && method === "POST") {
+        return {
+          tool_name: "supplier.search",
+          arguments: { query: "Hardware" },
+          rationale: "Mock proposal",
+          requires_approval: false,
+        } as T;
+      }
+    }
+
+    if (path === "/tools" && method === "GET") {
+      return [
+        { name: "supplier.search", risk_level: "low", side_effect_status: "none" },
+        { name: "email.send", risk_level: "high", side_effect_status: "external" },
+        { name: "notification.send", risk_level: "low", side_effect_status: "internal" },
+        { name: "document.generate", risk_level: "medium", side_effect_status: "write" },
+        { name: "supplier.request_quote", risk_level: "medium", side_effect_status: "external" },
+        { name: "purchase_order.create_draft", risk_level: "high", side_effect_status: "write" },
+      ] as T;
+    }
+
+    if (path.match(/^\/processes\/[^/]+\/quotations$/) && method === "GET") {
+      return { items: [] } as T;
+    }
+    if (path.match(/^\/processes\/[^/]+\/quotations\/compare$/) && method === "POST") {
+      return {
+        winner_quotation_id: null,
+        explanation: "No quotations available in mock mode.",
+        scores: {},
+      } as T;
+    }
+    if (path.match(/^\/processes\/[^/]+\/purchase-orders$/) && method === "GET") {
+      return { items: [] } as T;
+    }
+    if (path.match(/^\/processes\/[^/]+\/execute$/) && method === "POST") {
+      const processId = path.split("/")[2];
+      const existing = PROCESS_RUNS.find((r) => r.process_id === processId);
+      if (!existing) {
+        PROCESS_RUNS.push({
+          id: crypto.randomUUID(),
+          organization_id: ORG_ID,
+          process_id: processId,
+          process_version_id: null,
+          status: "executing",
+          initiated_by_user_id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+          correlation_id: "corr-mock-start",
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          dry_run: false,
+          current_step_index: 1,
+          pause_reason: null,
+        });
+      } else {
+        existing.status = "executing";
+        existing.updated_at = new Date().toISOString();
+      }
+      const proc = PROCESSES.find((p) => p.id === processId);
+      if (proc) {
+        proc.has_execution = true;
+        proc.execution_status = "invoking_tool";
+      }
+      // Re-enter via recursive shape: return execution-like payload
+      return {
+        process_id: processId,
+        process_run_id: PROCESS_RUNS.find((r) => r.process_id === processId)!.id,
+        status: "executing",
+        dry_run: false,
+        current_step_index: 1,
+        tool_invocations: [
+          {
+            id: "mock-start-1",
+            tool_name: "supplier.search",
+            status: "executed",
+            created_at: new Date().toISOString(),
+          },
+        ],
+        playbook: [],
+        scorecard: { tools_total: 1, tools_successful: 1, success_rate: 100, steps_total: 1, steps_completed: 0 },
+        operator: { guidance: "", blocked_tools: [], email_guard_enabled: true, stuck_strikes: 0 },
+        execution_intelligence: {
+          executed_tools: ["supplier.search"],
+          email_send_count: 0,
+          max_email_send_per_run: 2,
+          plan_step_count: 1,
+          current_step_title: "Execute",
+          step_checklist: { complete: false, remaining: [], step_kind: "general" },
+          outbound_already_sent: [],
+        },
+        email_outbox: [],
+        generated_documents: [],
+        calendar_events: [],
+        tasks: [],
+        notifications: [],
       } as T;
     }
 

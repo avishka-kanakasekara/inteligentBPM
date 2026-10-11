@@ -184,3 +184,26 @@ def test_approval_decision_and_process_run(
     )
     assert decided.status_code == 200
     assert decided.json()["status"] == "approved"
+
+
+def test_delete_process_removes_it_from_summaries(
+    client: TestClient,
+    auth_headers_a: dict[str, str],
+) -> None:
+    created = client.post(
+        "/v1/processes",
+        headers=auth_headers_a,
+        json={"name": "Delete me", "description": "temporary"},
+    )
+    assert created.status_code == 201
+    process_id = created.json()["id"]
+
+    deleted = client.delete(f"/v1/processes/{process_id}", headers=auth_headers_a)
+    assert deleted.status_code == 204
+
+    summaries = client.get("/v1/processes/summaries", headers=auth_headers_a)
+    assert summaries.status_code == 200
+    assert all(item["id"] != process_id for item in summaries.json())
+
+    missing = client.get(f"/v1/processes/{process_id}", headers=auth_headers_a)
+    assert missing.status_code == 404

@@ -397,6 +397,9 @@ export const apiClient = {
       ProcessSummarySchema.parse(data),
     );
   },
+  deleteProcess(processId: string): Promise<void> {
+    return request(`/processes/${processId}`, () => undefined, { method: "DELETE" });
+  },
   createProcess(data: { name: string; description?: string }): Promise<ProcessSummary> {
     return request("/processes", (res) => ProcessSummarySchema.parse(res), {
       method: "POST",
@@ -455,7 +458,11 @@ export const apiClient = {
   },
   analyzeRisk(
     processId: string,
-    options?: { process_version_id?: string; spending_amount?: number },
+    options?: {
+      process_version_id?: string;
+      spending_amount?: number;
+      quotation_count?: number;
+    },
   ): Promise<any> {
     return request(`/processes/${processId}/analyze-risk`, (res) => res, {
       method: "POST",
@@ -549,6 +556,35 @@ export const apiClient = {
   },
   getExecution(processId: string): Promise<any> {
     return request(`/processes/${processId}/execution`, (res) => res);
+  },
+  steerExecution(
+    processId: string,
+    body: {
+      guidance?: string;
+      block_tools?: string[];
+      unblock_tools?: string[];
+      email_guard_enabled?: boolean;
+      run_id?: string;
+    },
+  ): Promise<any> {
+    return request(`/processes/${processId}/execution/steer`, (res) => res, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  },
+  skipExecutionProposal(
+    processId: string,
+    body: {
+      tool_name: string;
+      reason?: string;
+      advance_step?: boolean;
+      run_id?: string;
+    },
+  ): Promise<any> {
+    return request(`/processes/${processId}/execution/skip`, (res) => res, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
   },
   completeProcess(processId: string): Promise<ProcessSummary> {
     return request(`/processes/${processId}/complete`, (data) =>

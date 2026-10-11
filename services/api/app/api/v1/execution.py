@@ -18,8 +18,10 @@ from app.contracts.schemas import (
     ExecutionControlRequest,
     ExecutionInvokeRequest,
     ExecutionReportResponse,
+    ExecutionSkipRequest,
     ExecutionStartRequest,
     ExecutionStateResponse,
+    ExecutionSteerRequest,
     PurchaseOrderSubmitRequest,
     QuotationCompareRequest,
     ToolDefinitionResponse,
@@ -240,9 +242,7 @@ async def invoke_tool(
     return ToolInvocationResponse.model_validate(inv.model_dump(mode="json"))
 
 
-@router.post(
-    "/processes/{process_id}/execution/propose",
-)
+@router.post("/processes/{process_id}/execution/propose")
 async def propose_execution_action(
     process_id: UUID,
     request: Request,
@@ -259,6 +259,49 @@ async def propose_execution_action(
         permissions=org.permissions,
     )
     return proposal.model_dump(mode="json")
+
+
+@router.post("/processes/{process_id}/execution/steer", response_model=ExecutionStateResponse)
+async def steer_execution(
+    process_id: UUID,
+    body: ExecutionSteerRequest,
+    request: Request,
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    org: Annotated[OrganizationContext, Depends(require_permission(perm.EXECUTION_RUN))],
+) -> ExecutionStateResponse:
+    service = ExecutionService(org.organization_id)
+    result = service.steer_execution(
+        process_id,
+        user_id=user.id,
+        correlation_id=get_correlation_id(request),
+        guidance=body.guidance,
+        block_tools=body.block_tools,
+        unblock_tools=body.unblock_tools,
+        email_guard_enabled=body.email_guard_enabled,
+        run_id=body.run_id,
+    )
+    return ExecutionStateResponse.model_validate(result)
+
+
+@router.post("/processes/{process_id}/execution/skip", response_model=ExecutionStateResponse)
+async def skip_execution_proposal(
+    process_id: UUID,
+    body: ExecutionSkipRequest,
+    request: Request,
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    org: Annotated[OrganizationContext, Depends(require_permission(perm.EXECUTION_RUN))],
+) -> ExecutionStateResponse:
+    service = ExecutionService(org.organization_id)
+    result = service.skip_proposal(
+        process_id,
+        user_id=user.id,
+        correlation_id=get_correlation_id(request),
+        tool_name=body.tool_name,
+        reason=body.reason,
+        advance_step=body.advance_step,
+        run_id=body.run_id,
+    )
+    return ExecutionStateResponse.model_validate(result)
 
 
 @router.get("/processes/{process_id}/quotations")

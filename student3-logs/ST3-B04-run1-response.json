@@ -1,0 +1,72 @@
+{
+  "http_status": 200,
+  "body": {
+    "organization_id": "76ec608f-37a4-45fa-bb58-fb81c0710720",
+    "process_id": "78011b91-2dd3-4155-93e0-788f638d11fa",
+    "process_version_id": "e153f1cf-811a-49a7-b671-88680b604b65",
+    "status": "needs_clarification",
+    "assignments": [],
+    "candidates": [],
+    "conflicts": [],
+    "unresolved": [
+      {
+        "id": "unres_assign_report_assign_one_available_employee_with_pytho",
+        "step_id": "assign_report",
+        "requirement": "Assign one available employee with Python skills to prepare a standard internal procurement report. No personal-name characteristic should be relevant to this assignment.",
+        "resource_type": "employee",
+        "question": "No active directory match for 'Assign one available employee with Python skills to prepare a standard internal procurement report. No personal-name characteristic should be relevant to this assignment.'. Who should be assigned?",
+        "blocking": true,
+        "candidates": [],
+        "suggested_alternatives": []
+      }
+    ],
+    "integrations": [
+      {
+        "key": "email",
+        "available": true,
+        "mode": "mock",
+        "reason": "Email available via tool gateway (mock until credentials configured). Agent 2 must not send email."
+      },
+      {
+        "key": "suppliers",
+        "available": true,
+        "mode": "mock",
+        "reason": "Supplier channel available for later execution; Agent 2 only reads directory data."
+      },
+      {
+        "key": "purchasing",
+        "available": true,
+        "mode": "mock",
+        "reason": "Purchasing is draft-only until approved execution. Agent 2 must not create purchase orders."
+      },
+      {
+        "key": "billing_connector",
+        "available": true,
+        "mode": "mock",
+        "reason": "Billing connector entitlement based on plan; Agent 2 does not mutate billing."
+      },
+      {
+        "key": "notifications",
+        "available": true,
+        "mode": "mock",
+        "reason": "In-app notifications available; Agent 2 does not notify."
+      }
+    ],
+    "clarifying_questions": [
+      "No active directory match for 'Assign one available employee with Python skills to prepare a standard internal procurement report. No personal-name characteristic should be relevant to this assignment.'. Who should be assigned?"
+    ],
+    "reasoning_summary": "Deterministic matching plus heuristic name matching against the company directory. Clarification required only for remaining unresolved items; no resources were invented.",
+    "llm_used": true,
+    "invented_resources": false,
+    "side_effects_executed": false,
+    "organization_profile": {
+      "organization_id": "76ec608f-37a4-45fa-bb58-fb81c0710720",
+      "name": "Acme Corporation",
+      "plan_code": "enterprise",
+      "industry": "Technology / Professional Services",
+      "country_code": "US",
+      "default_currency": "USD",
+      "status": "active"
+    }
+  }
+}

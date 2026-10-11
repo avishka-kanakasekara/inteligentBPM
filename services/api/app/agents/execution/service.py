@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 import uuid
 from datetime import UTC
 from typing import Any
@@ -210,7 +212,12 @@ class ExecutionService:
         run = self._resolve_run(process_id, run_id)
         version = self.processes.get_version(process_id, run.process_version_id)
         steps = (version.plan_snapshot or {}).get("steps") or []
-        max_steps = max(1, min(int(max_steps or 20), 40))
+        max_steps = max(1, min(int(max_steps or 40), 80))
+        self._trace(
+            run,
+            f"Reading the plan ({len(steps)} steps) and working through every outcome.",
+            kind="plan",
+        )
 
         if run.status in {
             ProcessRunStatus.PAUSED,
@@ -254,8 +261,111 @@ class ExecutionService:
                 run.updated_at = utcnow()
                 break
 
+            proposal = self._refine_proposal(
+                proposal,
+                process_id=process_id,
+                run=run,
+                steps=steps,
+                curr_idx=curr_idx,
+                allowed=list(getattr(run, "allowed_tools", None) or list(TOOL_CATALOG.keys())),
+            )
+            self._trace(
+                run,
+                proposal.rationale or f"Next: {proposal.tool_name}",
+                kind="decide",
+                tool=proposal.tool_name,
+                step=curr_idx,
+            )
+            if proposal.tool_name == "__noop__":
+                self._apply_step_progress(
+                    run,
+                    steps=steps,
+                    curr_idx=curr_idx,
+                    proposal=proposal,
+                    invocation_status="executed",
+                )
+                continue
+
             args = dict(proposal.arguments or {})
             self._ensure_tool_args(proposal.tool_name, args, process_id=process_id, run=run)
+            blocked = self._outbound_block_reason(proposal.tool_name, args, run=run)
+            if blocked:
+                logger.info(
+                    "execution.outbound_blocked",
+                    tool=proposal.tool_name,
+                    reason=blocked,
+                    run_id=str(run.id),
+                )
+                # Prefer a non-email tool instead of pausing the whole run.
+                alt = self._heuristic_proposal(
+                    current_step=steps[curr_idx] if curr_idx < len(steps) else None,
+                    allowed=[
+                        t
+                        for t in (
+                            getattr(run, "allowed_tools", None) or list(TOOL_CATALOG.keys())
+                        )
+                        if t
+                        not in {
+                            "email.send",
+                            proposal.tool_name,
+                        }
+                    ],
+                    curr_idx=curr_idx,
+                    allocation=self._latest_allocation(process_id) or {},
+                    process_id=process_id,
+                    run=run,
+                )
+                if alt.tool_name in {"email.send", proposal.tool_name}:
+                    # Do not skip unfinished plan work just because outbound is blocked.
+                    checklist = self._step_checklist(
+                        step=steps[curr_idx] if curr_idx < len(steps) else None,
+                        run=run,
+                    )
+                    rem = [
+                        t
+                        for t in (checklist.get("remaining") or [])
+                        if t
+                        not in {
+                            "email.send",
+                            "email.create_draft",
+                            proposal.tool_name,
+                        }
+                    ]
+                    if checklist.get("complete"):
+                        self._apply_step_progress(
+                            run,
+                            steps=steps,
+                            curr_idx=curr_idx,
+                            proposal=ToolProposalOutput(
+                                tool_name="__noop__",
+                                arguments={},
+                                rationale=blocked,
+                                next_step_index=curr_idx + 1,
+                            ),
+                            invocation_status="executed",
+                        )
+                        continue
+                    if not rem:
+                        run.status = ProcessRunStatus.PAUSED
+                        run.pause_reason = blocked
+                        run.updated_at = utcnow()
+                        break
+                    proposal = ToolProposalOutput(
+                        tool_name=rem[0],
+                        arguments={},
+                        rationale=f"{blocked} — switching to {rem[0]}",
+                        next_step_index=None,
+                    )
+                    args = dict(proposal.arguments or {})
+                    self._ensure_tool_args(
+                        proposal.tool_name, args, process_id=process_id, run=run
+                    )
+                else:
+                    proposal = alt
+                    args = dict(proposal.arguments or {})
+                    self._ensure_tool_args(
+                        proposal.tool_name, args, process_id=process_id, run=run
+                    )
 
             inv = self.invoke_tool(
                 process_id,
@@ -269,57 +379,125 @@ class ExecutionService:
             )
             executed += 1
             run = self._resolve_run(process_id, run.id)
+            self._trace(
+                run,
+                f"{proposal.tool_name} → {inv.status}",
+                kind="act" if inv.status in {"executed", "replayed"} else "error",
+                tool=proposal.tool_name,
+                step=curr_idx,
+            )
 
             if inv.status in {"denied", "failed"}:
-                # Try one alternate read-only/notification tool before pausing
-                if (
-                    executed < max_steps
-                    and inv.error
-                    and inv.error.code.value != "APPROVAL_REQUIRED"
-                ):
-                    alt = self._heuristic_proposal(
-                        current_step=steps[curr_idx] if curr_idx < len(steps) else None,
-                        allowed=[
-                            t
-                            for t in (
-                                getattr(run, "allowed_tools", None) or list(TOOL_CATALOG.keys())
-                            )
-                            if t
-                            not in {
-                                proposal.tool_name,
-                                "purchase_order.submit",
-                                "email.send",
-                            }
-                            or t
-                            in {
-                                "email.create_draft",
-                                "notification.send",
-                                "company.employee_lookup",
-                                "supplier.search",
-                            }
-                        ],
-                        curr_idx=curr_idx,
-                        allocation=self._latest_allocation(process_id) or {},
-                        error=inv.error.message,
+                meta = self._run_meta(run)
+                last = list(meta.get("recent_failures") or [])
+                last.append(
+                    {
+                        "tool": proposal.tool_name,
+                        "status": inv.status,
+                        "at": utcnow().isoformat(),
+                    }
+                )
+                meta["recent_failures"] = last[-8:]
+                failed_tool = proposal.tool_name
+                same = [f for f in meta["recent_failures"] if f.get("tool") == failed_tool]
+                meta["stuck_strikes"] = len(same)
+                run.metadata = meta
+
+                # After repeated failures, auto-block that tool so the plan can continue.
+                if len(same) >= 3 and failed_tool in TOOL_CATALOG:
+                    blocked = set(meta.get("blocked_tools") or [])
+                    blocked.add(failed_tool)
+                    meta["blocked_tools"] = sorted(blocked)
+                    meta["recent_failures"] = [
+                        f for f in meta["recent_failures"] if f.get("tool") != failed_tool
+                    ]
+                    meta["stuck_strikes"] = 0
+                    run.metadata = meta
+
+                checklist = self._step_checklist(
+                    step=steps[curr_idx] if curr_idx < len(steps) else None,
+                    run=run,
+                )
+                blocked_now = set(self._operator_state(run).get("blocked_tools") or [])
+                rem = [
+                    t
+                    for t in (checklist.get("remaining") or [])
+                    if t != failed_tool and t not in blocked_now
+                ]
+
+                # Keep the run executing so recovery tools can still run.
+                if run.status in {
+                    ProcessRunStatus.PAUSED,
+                    ProcessRunStatus.AWAITING_APPROVAL,
+                } and rem:
+                    run.status = ProcessRunStatus.EXECUTING
+                    run.pause_reason = None
+                    run.updated_at = utcnow()
+
+                # Always auto-block the failed tool so propose won't loop it.
+                if failed_tool in TOOL_CATALOG:
+                    blocked_now.add(failed_tool)
+                    meta["blocked_tools"] = sorted(blocked_now)
+                    run.metadata = meta
+
+                if rem and executed < max_steps:
+                    alt_name = rem[0]
+                    args2: dict[str, Any] = {}
+                    self._ensure_tool_args(alt_name, args2, process_id=process_id, run=run)
+                    inv2 = self.invoke_tool(
+                        process_id,
+                        tool_name=alt_name,
+                        arguments=args2,
+                        user_id=user_id,
+                        correlation_id=correlation_id,
+                        permissions=permissions,
+                        run_id=run.id,
+                        dry_run=False,
                     )
-                    if alt.tool_name != proposal.tool_name:
-                        args2 = dict(alt.arguments or {})
-                        self._ensure_tool_args(alt.tool_name, args2, process_id=process_id, run=run)
-                        inv2 = self.invoke_tool(
-                            process_id,
-                            tool_name=alt.tool_name,
-                            arguments=args2,
-                            user_id=user_id,
-                            correlation_id=correlation_id,
-                            permissions=permissions,
-                            run_id=run.id,
-                            dry_run=False,
+                    executed += 1
+                    run = self._resolve_run(process_id, run.id)
+                    if inv2.status in {"executed", "replayed", "dry_run"}:
+                        self._apply_step_progress(
+                            run,
+                            steps=steps,
+                            curr_idx=curr_idx,
+                            proposal=ToolProposalOutput(
+                                tool_name=alt_name,
+                                arguments=args2,
+                                rationale=f"Recovered after {failed_tool} failure → {alt_name}",
+                            ),
+                            invocation_status=inv2.status,
                         )
-                        executed += 1
-                        run = self._resolve_run(process_id, run.id)
-                        if inv2.status in {"executed", "replayed", "dry_run"}:
-                            continue
-                break
+                        continue
+                    # Recovery tool also failed — keep looping to propose another tool.
+                    continue
+
+                if checklist.get("complete"):
+                    self._apply_step_progress(
+                        run,
+                        steps=steps,
+                        curr_idx=curr_idx,
+                        proposal=ToolProposalOutput(
+                            tool_name="__noop__",
+                            arguments={},
+                            rationale=f"Skipping failed {failed_tool}; step outcomes met",
+                            next_step_index=curr_idx + 1,
+                        ),
+                        invocation_status="executed",
+                    )
+                    continue
+
+                if len(same) >= 3 and not rem:
+                    run.status = ProcessRunStatus.PAUSED
+                    run.pause_reason = (
+                        f"Stuck watchdog: {failed_tool} failed/denied repeatedly "
+                        "and no alternate remain."
+                    )
+                    run.updated_at = utcnow()
+                    break
+                # Soft failure: keep advancing proposals instead of ending the run.
+                continue
+
             if run.status in {
                 ProcessRunStatus.PAUSED,
                 ProcessRunStatus.AWAITING_APPROVAL,
@@ -328,22 +506,43 @@ class ExecutionService:
             }:
                 break
             if inv.status in {"executed", "replayed", "dry_run"}:
-                if proposal.next_step_index is not None and proposal.next_step_index > curr_idx:
-                    run.current_step_index = min(
-                        proposal.next_step_index, len(steps) if steps else proposal.next_step_index
+                meta = self._run_meta(run)
+                if inv.status == "replayed":
+                    replays = list(meta.get("recent_replays") or [])
+                    replays.append(
+                        {"tool": proposal.tool_name, "at": utcnow().isoformat()}
                     )
-                    run.updated_at = utcnow()
-                elif inv.status == "replayed":
-                    run.current_step_index = min(
-                        curr_idx + 1, len(steps) if steps else curr_idx + 1
-                    )
-                    run.updated_at = utcnow()
+                    meta["recent_replays"] = replays[-12:]
+                    same_replay = [
+                        r for r in meta["recent_replays"] if r.get("tool") == proposal.tool_name
+                    ]
+                    if len(same_replay) >= 2:
+                        blocked = set(meta.get("blocked_tools") or [])
+                        if proposal.tool_name in TOOL_CATALOG:
+                            blocked.add(proposal.tool_name)
+                        meta["blocked_tools"] = sorted(blocked)
+                        run.metadata = meta
+                        # Skip applying progress for a pure replay loop; pick another tool.
+                        continue
+                    run.metadata = meta
+                if meta.get("stuck_strikes"):
+                    meta["stuck_strikes"] = 0
+                    meta["recent_failures"] = []
+                    run.metadata = meta
+                self._apply_step_progress(
+                    run,
+                    steps=steps,
+                    curr_idx=curr_idx,
+                    proposal=proposal,
+                    invocation_status=inv.status,
+                )
 
         if steps and int(getattr(run, "current_step_index", 0) or 0) >= len(steps):
             if run.status == ProcessRunStatus.EXECUTING:
                 run.status = ProcessRunStatus.COMPLETED
                 run.pause_reason = None
                 run.updated_at = utcnow()
+                self._trace(run, "Finished the process. Every plan step is done.", kind="done")
 
         from app.database.persist_helpers import persist_if_postgres
         from app.services.workload import recompute_organization_workload
@@ -568,7 +767,18 @@ class ExecutionService:
         )
         if invocation.error and invocation.status in {"denied", "failed"}:
             code = invocation.error.code.value
-            if code in {"APPROVAL_REQUIRED", "MISSING_INFORMATION"}:
+            # Soft-fail optional lookups — do not freeze the whole plan.
+            soft_fail_tools = {
+                "company.manager_lookup",
+                "company.employee_lookup",
+                "supplier.contact_lookup",
+                "supplier.approved_status",
+                "policy.search",
+                "document.search",
+            }
+            if tool_name in soft_fail_tools or tool_name == "notification.send":
+                run.updated_at = utcnow()
+            elif code in {"APPROVAL_REQUIRED", "MISSING_INFORMATION"}:
                 run.status = ProcessRunStatus.PAUSED
                 run.pause_reason = invocation.error.message
                 run.updated_at = utcnow()
@@ -661,6 +871,252 @@ class ExecutionService:
                 self._artifacts_from_invocations(invocations, "notification.send"),
                 self._store_artifacts(self.store.notifications, process_id),
             ),
+            "execution_intelligence": self._execution_intelligence(process_id, run),
+            "playbook": self._build_playbook(process_id, run),
+            "scorecard": self._build_scorecard(process_id, run),
+            "operator": self._operator_state(run),
+            "agent_activity": list(self._run_meta(run).get("agent_activity") or [])[-40:],
+        }
+
+    def _trace(
+        self,
+        run: Any,
+        message: str,
+        *,
+        kind: str = "note",
+        tool: str | None = None,
+        step: int | None = None,
+    ) -> None:
+        meta = self._run_meta(run)
+        trail = list(meta.get("agent_activity") or [])
+        trail.append(
+            {
+                "at": utcnow().isoformat(),
+                "kind": kind,
+                "message": (message or "").strip()[:400],
+                "tool": tool,
+                "step": step,
+            }
+        )
+        meta["agent_activity"] = trail[-60:]
+        run.metadata = meta
+
+    def _run_meta(self, run: Any) -> dict[str, Any]:
+        meta = getattr(run, "metadata", None)
+        if not isinstance(meta, dict):
+            meta = {}
+            run.metadata = meta
+        return meta
+
+    def _operator_state(self, run: Any) -> dict[str, Any]:
+        meta = self._run_meta(run)
+        return {
+            "guidance": meta.get("operator_guidance") or "",
+            "blocked_tools": list(meta.get("blocked_tools") or []),
+            "skipped_proposals": list(meta.get("skipped_proposals") or [])[-10:],
+            "guidance_history": list(meta.get("guidance_history") or [])[-8:],
+            "email_guard_enabled": bool(meta.get("email_guard_enabled", True)),
+            "stuck_strikes": int(meta.get("stuck_strikes") or 0),
+        }
+
+    def steer_execution(
+        self,
+        process_id: UUID,
+        *,
+        user_id: UUID,
+        correlation_id: str | None,
+        guidance: str,
+        block_tools: list[str] | None = None,
+        unblock_tools: list[str] | None = None,
+        email_guard_enabled: bool | None = None,
+        run_id: UUID | None = None,
+    ) -> dict[str, Any]:
+        """Operator guidance that shapes the next proposals."""
+        run = self._resolve_run(process_id, run_id)
+        meta = self._run_meta(run)
+        text = (guidance or "").strip()
+        if text:
+            meta["operator_guidance"] = text[:2000]
+            history = list(meta.get("guidance_history") or [])
+            history.append(
+                {
+                    "at": utcnow().isoformat(),
+                    "user_id": str(user_id),
+                    "guidance": text[:500],
+                }
+            )
+            meta["guidance_history"] = history[-20:]
+        blocked = set(meta.get("blocked_tools") or [])
+        for name in block_tools or []:
+            if name in TOOL_CATALOG:
+                blocked.add(name)
+        for name in unblock_tools or []:
+            blocked.discard(name)
+        meta["blocked_tools"] = sorted(blocked)
+        if email_guard_enabled is not None:
+            meta["email_guard_enabled"] = bool(email_guard_enabled)
+        run.metadata = meta
+        run.updated_at = utcnow()
+        from app.database.persist_helpers import persist_if_postgres
+
+        persist_if_postgres(self.store, "process_runs", run.id)
+        self.audit.record(
+            organization_id=self.organization_id,
+            actor_user_id=user_id,
+            action="execution.steered",
+            resource_type="process_run",
+            resource_id=run.id,
+            correlation_id=correlation_id,
+            payload={
+                "guidance": text[:200],
+                "blocked_tools": meta["blocked_tools"],
+                "email_guard_enabled": meta.get("email_guard_enabled", True),
+            },
+        )
+        return self.get_execution(process_id, run_id=run.id)
+
+    def skip_proposal(
+        self,
+        process_id: UUID,
+        *,
+        user_id: UUID,
+        correlation_id: str | None,
+        tool_name: str,
+        reason: str | None = None,
+        advance_step: bool = False,
+        run_id: UUID | None = None,
+    ) -> dict[str, Any]:
+        """Reject the current proposed tool and optionally advance the plan step."""
+        run = self._resolve_run(process_id, run_id)
+        meta = self._run_meta(run)
+        skips = list(meta.get("skipped_proposals") or [])
+        skips.append(
+            {
+                "at": utcnow().isoformat(),
+                "tool_name": tool_name,
+                "reason": (reason or "Operator skipped").strip()[:500],
+                "step_index": int(getattr(run, "current_step_index", 0) or 0),
+            }
+        )
+        meta["skipped_proposals"] = skips[-30:]
+        # Temporarily block this tool so the next propose picks something else.
+        blocked = set(meta.get("blocked_tools") or [])
+        if tool_name in TOOL_CATALOG:
+            blocked.add(tool_name)
+        meta["blocked_tools"] = sorted(blocked)
+        run.metadata = meta
+        if advance_step:
+            version = self.processes.get_version(process_id, run.process_version_id)
+            steps = (version.plan_snapshot or {}).get("steps") or []
+            curr = int(getattr(run, "current_step_index", 0) or 0)
+            run.current_step_index = min(curr + 1, len(steps) if steps else curr + 1)
+        run.updated_at = utcnow()
+        from app.database.persist_helpers import persist_if_postgres
+
+        persist_if_postgres(self.store, "process_runs", run.id)
+        self.audit.record(
+            organization_id=self.organization_id,
+            actor_user_id=user_id,
+            action="execution.proposal_skipped",
+            resource_type="process_run",
+            resource_id=run.id,
+            correlation_id=correlation_id,
+            payload={"tool_name": tool_name, "reason": reason, "advance_step": advance_step},
+        )
+        return self.get_execution(process_id, run_id=run.id)
+
+    def _build_playbook(self, process_id: UUID, run: Any) -> list[dict[str, Any]]:
+        version = self.processes.get_version(process_id, run.process_version_id)
+        steps = (version.plan_snapshot or {}).get("steps") or []
+        curr_idx = int(getattr(run, "current_step_index", 0) or 0)
+        executed = self._successful_tool_names(run)
+        playbook: list[dict[str, Any]] = []
+        for idx, step in enumerate(steps):
+            checklist = self._step_checklist(step=step, run=run)
+            status = "pending"
+            if idx < curr_idx:
+                status = "done"
+            elif idx == curr_idx:
+                status = "complete" if checklist.get("complete") else "active"
+            playbook.append(
+                {
+                    "index": idx,
+                    "title": step.get("title") or f"Step {idx + 1}",
+                    "description": (step.get("description") or "")[:240],
+                    "action_type": step.get("action_type"),
+                    "status": status,
+                    "step_kind": checklist.get("step_kind"),
+                    "remaining": checklist.get("remaining") if idx == curr_idx else [],
+                    "allowed_tools": list(step.get("allowed_tools") or []),
+                    "success_criteria": list(step.get("success_criteria") or []),
+                    "tools_done_on_step": sorted(
+                        set(checklist.get("executed_tools") or []) & executed
+                    )
+                    if idx == curr_idx
+                    else [],
+                }
+            )
+        return playbook
+
+    def _build_scorecard(self, process_id: UUID, run: Any) -> dict[str, Any]:
+        rows = self._run_invocation_rows(run)
+        ok = [r for r in rows if r.get("status") in {"executed", "replayed"}]
+        failed = [r for r in rows if r.get("status") in {"failed", "denied"}]
+        replayed = [r for r in rows if r.get("status") == "replayed"]
+        by_tool: dict[str, int] = {}
+        for r in ok:
+            name = str(r.get("tool_name") or "unknown")
+            by_tool[name] = by_tool.get(name, 0) + 1
+        sent = self._outbound_sent_records(run)
+        version = self.processes.get_version(process_id, run.process_version_id)
+        steps = (version.plan_snapshot or {}).get("steps") or []
+        curr = int(getattr(run, "current_step_index", 0) or 0)
+        created = getattr(run, "created_at", None)
+        updated = getattr(run, "updated_at", None)
+        duration_s = None
+        if created and updated:
+            try:
+                duration_s = max(0, int((updated - created).total_seconds()))
+            except Exception:  # noqa: BLE001
+                duration_s = None
+        return {
+            "tools_total": len(rows),
+            "tools_successful": len(ok),
+            "tools_failed_or_denied": len(failed),
+            "tools_replayed": len(replayed),
+            "success_rate": round((len(ok) / len(rows)) * 100, 1) if rows else 0.0,
+            "unique_tools": len(by_tool),
+            "tool_counts": by_tool,
+            "email_sends": len([r for r in sent if r["tool"] == "email.send"]),
+            "notifications": len([r for r in sent if r["tool"] == "notification.send"]),
+            "documents": by_tool.get("document.generate", 0),
+            "purchase_orders_submitted": by_tool.get("purchase_order.submit", 0),
+            "quotes_requested": by_tool.get("supplier.request_quote", 0),
+            "steps_total": len(steps),
+            "steps_completed": min(curr, len(steps)),
+            "duration_seconds": duration_s,
+            "status": run.status.value if hasattr(run.status, "value") else str(run.status),
+        }
+
+    def _execution_intelligence(self, process_id: UUID, run: Any) -> dict[str, Any]:
+        version = self.processes.get_version(process_id, run.process_version_id)
+        steps = (version.plan_snapshot or {}).get("steps") or []
+        curr_idx = int(getattr(run, "current_step_index", 0) or 0)
+        current_step = steps[curr_idx] if curr_idx < len(steps) else None
+        sent = self._outbound_sent_records(run)
+        op = self._operator_state(run)
+        return {
+            "executed_tools": sorted(self._successful_tool_names(run)),
+            "outbound_already_sent": sent,
+            "step_checklist": self._step_checklist(step=current_step, run=run),
+            "email_send_count": len([r for r in sent if r["tool"] == "email.send"]),
+            "max_email_send_per_run": 2,
+            "plan_step_count": len(steps),
+            "current_step_title": (current_step or {}).get("title") if current_step else None,
+            "operator_guidance": op.get("guidance") or "",
+            "blocked_tools": op.get("blocked_tools") or [],
+            "email_guard_enabled": op.get("email_guard_enabled", True),
+            "next_recommended": (self._step_checklist(step=current_step, run=run).get("remaining") or [None])[0],
         }
 
     def _artifacts_from_invocations(
@@ -1054,32 +1510,496 @@ class ExecutionService:
         }
 
     def _allowed_tools_from_plan(self, plan_snapshot: dict[str, Any]) -> list[str]:
-        allowed: set[str] = set(TOOL_CATALOG.keys())
+        catalog = set(TOOL_CATALOG.keys())
         step_tools: set[str] = set()
         for step in plan_snapshot.get("steps") or []:
             for t in step.get("allowed_tools") or []:
-                step_tools.add(t)
-        if step_tools:
-            allowed &= step_tools
-            for name, tool in TOOL_CATALOG.items():
-                if tool.side_effect_status.value == "none":
-                    allowed.add(name)
-            for name in (
-                "email.create_draft",
+                if t in catalog:
+                    step_tools.add(t)
+        if not step_tools:
+            return sorted(catalog)
+
+        allowed = set(step_tools)
+        # Read-only tools are always safe to keep available.
+        for name, tool in TOOL_CATALOG.items():
+            if tool.side_effect_status.value == "none":
+                allowed.add(name)
+        # Draft / commercial progression helpers — not free-form email spam.
+        for name in (
+            "email.create_draft",
+            "supplier.request_quote",
+            "supplier.collect_quote",
+            "quotation.compare",
+            "purchase_order.create_draft",
+            "purchase_order.submit",
+            "document.generate",
+            "calendar.create_event",
+            "task.assign",
+            "notification.send",
+            "approval.request",
+        ):
+            if name in catalog:
+                allowed.add(name)
+        # Only keep email.send when the plan itself named it.
+        if "email.send" in step_tools and "email.send" in catalog:
+            allowed.add("email.send")
+        return sorted(allowed)
+
+    def _run_invocation_rows(self, run: Any) -> list[dict[str, Any]]:
+        return [
+            v
+            for v in self.store.tool_invocations.values()
+            if v.get("organization_id") == str(self.organization_id)
+            and v.get("process_run_id") == str(run.id)
+        ]
+
+    def _successful_tool_names(self, run: Any) -> set[str]:
+        return {
+            str(v.get("tool_name"))
+            for v in self._run_invocation_rows(run)
+            if v.get("status") in {"executed", "replayed"}
+        }
+
+    def _stable_idempotency_key(
+        self, *, run: Any, tool_name: str, purpose: str
+    ) -> str:
+        step = int(getattr(run, "current_step_index", 0) or 0)
+        digest = hashlib.sha256(
+            f"{run.id}:{step}:{tool_name}:{purpose}".encode()
+        ).hexdigest()
+        return f"{tool_name.split('.')[-1]}-{digest[:24]}"
+
+    def _normalize_recipient(self, value: Any) -> str:
+        return str(value or "").strip().lower()
+
+    def _outbound_sent_records(self, run: Any) -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+        for row in self._run_invocation_rows(run):
+            tool = str(row.get("tool_name") or "")
+            if tool not in {
                 "email.send",
                 "notification.send",
                 "supplier.request_quote",
+                "purchase_order.submit",
+            }:
+                continue
+            if row.get("status") not in {"executed", "replayed"}:
+                continue
+            args = row.get("arguments") or {}
+            recipient = (
+                args.get("to_employee_id")
+                or args.get("user_id")
+                or args.get("contact_email")
+                or args.get("supplier_id")
+            )
+            records.append(
+                {
+                    "tool": tool,
+                    "recipient": self._normalize_recipient(recipient),
+                    "subject": str(args.get("subject") or args.get("title") or "")[:120],
+                    "status": row.get("status"),
+                    "idempotency_key": args.get("idempotency_key"),
+                }
+            )
+        return records
+
+    def _outbound_block_reason(
+        self, tool_name: str, args: dict[str, Any], *, run: Any
+    ) -> str | None:
+        op = self._operator_state(run)
+        if tool_name in set(op.get("blocked_tools") or []):
+            return f"{tool_name} blocked by operator"
+        if tool_name == "email.send" and not op.get("email_guard_enabled", True):
+            # Guard disabled: still prevent exact same-key spam via gateway, but allow new sends.
+            sent = self._outbound_sent_records(run)
+            email_sends = [r for r in sent if r["tool"] == "email.send"]
+            recipient = self._normalize_recipient(args.get("to_employee_id"))
+            if recipient and any(r["recipient"] == recipient for r in email_sends):
+                return (
+                    f"email.send blocked: already emailed {recipient} in this run"
+                )
+            return None
+        sent = self._outbound_sent_records(run)
+        email_sends = [r for r in sent if r["tool"] == "email.send"]
+        if tool_name == "email.send":
+            if len(email_sends) >= 2:
+                return "email.send blocked: this run already sent two confirmation emails"
+            recipient = self._normalize_recipient(args.get("to_employee_id"))
+            if recipient and any(r["recipient"] == recipient for r in email_sends):
+                return (
+                    f"email.send blocked: already emailed {recipient} in this run — "
+                    "use document.generate, notification.send, or advance the step"
+                )
+        if tool_name == "notification.send":
+            recipient = self._normalize_recipient(args.get("user_id"))
+            notifs = [r for r in sent if r["tool"] == "notification.send"]
+            if recipient and any(r["recipient"] == recipient for r in notifs):
+                return f"notification.send blocked: already notified {recipient}"
+            if len(notifs) >= 2:
+                return "notification.send blocked: notification budget for this run is used"
+        return None
+
+    def _step_text(self, step: dict[str, Any] | None) -> str:
+        if not step:
+            return ""
+        return " ".join(
+            str(x)
+            for x in (
+                step.get("title"),
+                step.get("description"),
+                step.get("action_type"),
+                " ".join(step.get("allowed_tools") or []),
+            )
+            if x
+        ).lower()
+
+    def _step_checklist(
+        self, *, step: dict[str, Any] | None, run: Any
+    ) -> dict[str, Any]:
+        executed = self._successful_tool_names(run)
+        text = self._step_text(step)
+        sent = self._outbound_sent_records(run)
+        is_rfq = any(
+            k in text
+            for k in (
+                "quote",
+                "rfq",
+                "quotation",
+                "dual quote",
+                "request for quote",
+            )
+        )
+        is_order = any(
+            k in text
+            for k in (
+                "purchase order",
+                "create po",
+                "submit po",
+                "order fulfillment",
+                "issue purchase",
+            )
+        ) or bool(re.search(r"\b(po|order)\b", text)) and "quote" not in text
+        quotes = [
+            q
+            for q in self.store.quotations.values()
+            if q.get("organization_id") == str(self.organization_id)
+            and (
+                not getattr(run, "process_id", None)
+                or q.get("process_id") in {None, str(getattr(run, "process_id", None))}
+            )
+        ]
+        pos = [
+            p
+            for p in self.store.purchase_orders.values()
+            if p.get("organization_id") == str(self.organization_id)
+            and (
+                not getattr(run, "process_id", None)
+                or p.get("process_id") in {None, str(getattr(run, "process_id", None))}
+            )
+        ]
+        submitted = any(p.get("submitted") for p in pos)
+        checklist = {
+            "step_kind": "rfq" if is_rfq else "order" if is_order else "general",
+            "executed_tools": sorted(executed),
+            "email_sends": len([r for r in sent if r["tool"] == "email.send"]),
+            "notifications": len([r for r in sent if r["tool"] == "notification.send"]),
+            "quotes_collected": len(quotes),
+            "po_drafted": any(True for _ in pos),
+            "po_submitted": submitted,
+            "document_generated": "document.generate" in executed,
+            "calendar_created": "calendar.create_event" in executed,
+            "task_assigned": "task.assign" in executed,
+            "complete": False,
+            "remaining": [],
+        }
+        remaining: list[str] = []
+        if is_rfq:
+            reqs = [
+                r
+                for r in self.store.quote_requests.values()
+                if r.get("organization_id") == str(self.organization_id)
+                and (
+                    not getattr(run, "process_id", None)
+                    or r.get("process_id")
+                    in {None, str(getattr(run, "process_id", None))}
+                )
+            ]
+            if len(reqs) < 2:
+                remaining.append("supplier.request_quote")
+            if len(quotes) < 2:
+                remaining.append("supplier.collect_quote")
+            if "quotation.compare" not in executed and len(quotes) >= 2:
+                remaining.append("quotation.compare")
+            checklist["complete"] = (
+                len(reqs) >= 2
+                and len(quotes) >= 2
+                and "quotation.compare" in executed
+            )
+        elif is_order:
+            if not any(True for _ in pos):
+                remaining.append("purchase_order.create_draft")
+            if not submitted:
+                remaining.append("purchase_order.submit")
+            if "document.generate" not in executed:
+                remaining.append("document.generate")
+            if "calendar.create_event" not in executed:
+                remaining.append("calendar.create_event")
+            if "task.assign" not in executed:
+                remaining.append("task.assign")
+            if "notification.send" not in executed and "email.send" not in executed:
+                remaining.append("notification.send")
+            checklist["complete"] = (
+                submitted
+                and "document.generate" in executed
+                and "calendar.create_event" in executed
+                and "task.assign" in executed
+                and (
+                    "notification.send" in executed
+                    or "email.send" in executed
+                )
+            )
+        else:
+            action = str((step or {}).get("action_type") or "")
+            is_discovery = action in {"collect_info", "discovery"} or any(
+                k in text
+                for k in (
+                    "identify staff",
+                    "discover staff",
+                    "staff & suppliers",
+                    "directory lookup",
+                    "supplier lookup",
+                )
+            )
+            allowed = [
+                str(t)
+                for t in (step or {}).get("allowed_tools") or []
+                if isinstance(t, str) and t in TOOL_CATALOG
+            ]
+            if is_discovery:
+                core = [
+                    t
+                    for t in ("supplier.search", "company.employee_lookup")
+                    if not allowed or t in allowed
+                ]
+                for t in core:
+                    if t not in executed:
+                        remaining.append(t)
+                checklist["step_kind"] = "discovery"
+                checklist["complete"] = len(remaining) == 0
+                checklist["remaining"] = remaining
+                return checklist
+            outcome_priority = [
+                "supplier.search",
+                "supplier.request_quote",
                 "supplier.collect_quote",
+                "quotation.compare",
                 "purchase_order.create_draft",
                 "purchase_order.submit",
-                "approval.request",
+                "document.generate",
                 "calendar.create_event",
                 "task.assign",
+                "notification.send",
+                "email.create_draft",
+                "email.send",
+                "company.employee_lookup",
+                "company.manager_lookup",
+                "policy.search",
+                "document.search",
+            ]
+            preferred = [t for t in outcome_priority if t in allowed]
+            if not preferred:
+                preferred = allowed[:]
+            # Deduplicate while preserving order
+            seen: set[str] = set()
+            ordered: list[str] = []
+            for t in preferred:
+                if t not in seen:
+                    seen.add(t)
+                    ordered.append(t)
+            # Cap how many tools a general step needs so runs finish, but never after just one lookup.
+            target = ordered[: min(len(ordered), 5)] if ordered else [
                 "document.generate",
-            ):
-                if name in TOOL_CATALOG:
-                    allowed.add(name)
-        return sorted(allowed)
+                "notification.send",
+            ]
+            for t in target:
+                if t not in executed:
+                    remaining.append(t)
+            checklist["complete"] = len(remaining) == 0
+            if not target:
+                meaningful = executed & {
+                    "document.generate",
+                    "notification.send",
+                    "task.assign",
+                    "calendar.create_event",
+                    "email.send",
+                    "email.create_draft",
+                    "approval.request",
+                    "policy.search",
+                    "document.search",
+                    "company.employee_lookup",
+                    "supplier.search",
+                }
+                checklist["complete"] = bool(meaningful)
+                if not meaningful:
+                    remaining.append("document.generate")
+            checklist["remaining"] = remaining
+            return checklist
+        checklist["remaining"] = remaining
+        return checklist
+
+    def _apply_step_progress(
+        self,
+        run: Any,
+        *,
+        steps: list[Any],
+        curr_idx: int,
+        proposal: ToolProposalOutput,
+        invocation_status: str,
+    ) -> None:
+        if not steps:
+            return
+        checklist = self._step_checklist(
+            step=steps[curr_idx] if curr_idx < len(steps) else None,
+            run=run,
+        )
+        advance_to: int | None = None
+        # Never jump more than one plan step at a time.
+        if checklist.get("complete") or proposal.tool_name == "__noop__":
+            if proposal.next_step_index is not None and proposal.next_step_index > curr_idx:
+                advance_to = curr_idx + 1
+            elif checklist.get("complete"):
+                advance_to = curr_idx + 1
+            elif proposal.tool_name == "__noop__":
+                advance_to = curr_idx + 1
+        elif invocation_status == "replayed" and checklist.get("complete"):
+            advance_to = curr_idx + 1
+
+        if advance_to is None:
+            return
+        run.current_step_index = min(advance_to, len(steps))
+        run.updated_at = utcnow()
+
+    def _refine_proposal(
+        self,
+        proposal: ToolProposalOutput,
+        *,
+        process_id: UUID,
+        run: Any,
+        steps: list[Any],
+        curr_idx: int,
+        allowed: list[str],
+    ) -> ToolProposalOutput:
+        op = self._operator_state(run)
+        blocked = set(op.get("blocked_tools") or [])
+        step = steps[curr_idx] if curr_idx < len(steps) else None
+        step_tools = [
+            str(t)
+            for t in (step or {}).get("allowed_tools") or []
+            if isinstance(t, str) and t in TOOL_CATALOG
+        ]
+        if step_tools:
+            allowed = [t for t in (allowed or step_tools) if t in step_tools]
+        if blocked:
+            allowed = [t for t in allowed if t not in blocked]
+        checklist = self._step_checklist(
+            step=steps[curr_idx] if curr_idx < len(steps) else None,
+            run=run,
+        )
+        executed = set(checklist.get("executed_tools") or [])
+        remaining = [t for t in (checklist.get("remaining") or []) if t not in blocked]
+
+        if checklist.get("complete"):
+            if curr_idx + 1 >= len(steps):
+                return ToolProposalOutput(
+                    tool_name="__noop__",
+                    arguments={},
+                    rationale="All plan steps are complete — finishing the run.",
+                    next_step_index=len(steps),
+                )
+            # Force advance without another outbound mail.
+            return ToolProposalOutput(
+                tool_name="__noop__",
+                arguments={},
+                rationale="Current step outcomes are complete — advancing to the next step.",
+                next_step_index=curr_idx + 1,
+            )
+
+        # Nothing left on this step — move on. Do not borrow tools from later steps.
+        if not remaining:
+            return ToolProposalOutput(
+                tool_name="__noop__",
+                arguments={},
+                rationale="This step has no remaining work — advancing.",
+                next_step_index=curr_idx + 1,
+            )
+
+        if proposal.tool_name not in allowed and proposal.tool_name != "__noop__":
+            if remaining:
+                proposal.tool_name = remaining[0]
+                proposal.rationale += " (Coerced to unfinished step outcome)"
+            elif allowed:
+                proposal.tool_name = allowed[0]
+                proposal.rationale += " (Selected fallback tool from allowed catalog)"
+
+        # Unfinished outcomes always beat side work.
+        if remaining and proposal.tool_name not in remaining:
+            preferred_remaining = [t for t in remaining if t in allowed or t in TOOL_CATALOG]
+            if preferred_remaining:
+                proposal.tool_name = preferred_remaining[0]
+                proposal.rationale = (
+                    f"Still need {preferred_remaining[0]} before this step can move on."
+                )
+                proposal.next_step_index = curr_idx
+                proposal.arguments = {}
+
+        # Never re-pick email.send once it already succeeded this run.
+        if proposal.tool_name == "email.send" and "email.send" in executed:
+            for candidate in remaining + [
+                "document.generate",
+                "notification.send",
+                "task.assign",
+                "calendar.create_event",
+                "email.create_draft",
+            ]:
+                if candidate in allowed and candidate not in executed:
+                    proposal.tool_name = candidate
+                    proposal.rationale += (
+                        " (Replaced duplicate email.send with unfinished execution tool)"
+                    )
+                    proposal.next_step_index = curr_idx
+                    break
+            else:
+                return ToolProposalOutput(
+                    tool_name="__noop__",
+                    arguments={},
+                    rationale="Email already sent for this run — advancing without resending.",
+                    next_step_index=curr_idx + 1,
+                )
+
+        # Prefer completing commercial outcomes before notifying/emailing.
+        if proposal.tool_name in {"email.send", "notification.send"} and remaining:
+            preferred = [
+                t
+                for t in remaining
+                if t
+                not in {
+                    "email.send",
+                    "notification.send",
+                }
+            ]
+            if preferred and preferred[0] in allowed:
+                proposal.tool_name = preferred[0]
+                proposal.rationale += (
+                    f" (Deferred outbound mail until {preferred[0]} completes)"
+                )
+                proposal.next_step_index = curr_idx
+
+        # Cap next_step_index so multi-action steps stay put until checklist is complete.
+        if not checklist.get("complete") and proposal.next_step_index is not None:
+            if proposal.next_step_index > curr_idx and remaining:
+                proposal.next_step_index = curr_idx
+
+        return proposal
 
     def propose_next_tool(
         self,
@@ -1099,6 +2019,15 @@ class ExecutionService:
         current_step = steps[curr_idx] if curr_idx < len(steps) else None
 
         allowed = list(getattr(run, "allowed_tools", None) or list(TOOL_CATALOG.keys()))
+        op = self._operator_state(run)
+        blocked = set(op.get("blocked_tools") or [])
+        if blocked:
+            allowed = [t for t in allowed if t not in blocked]
+        if not op.get("email_guard_enabled", True):
+            # Guard off still keeps anti-repeat soft, but allows email in allowlist.
+            pass
+        elif "email.send" in blocked:
+            allowed = [t for t in allowed if t != "email.send"]
         recent_invocations = [
             {
                 "tool": v.get("tool_name"),
@@ -1198,20 +2127,40 @@ class ExecutionService:
             "preferred_email_recipient": preferred,
             "directory": self._directory_context(),
             "recent_tool_results": recent_invocations,
+            "executed_tools": sorted(self._successful_tool_names(run)),
+            "outbound_already_sent": self._outbound_sent_records(run),
+            "step_checklist": self._step_checklist(step=current_step, run=run),
             "active_quote_requests": active_requests,
             "collected_quotations": collected_quotes,
             "purchase_orders": pos,
             "status": run.status.value,
+            "execution_rules": {
+                "max_email_send_per_run": 2,
+                "never_resend_same_recipient": True,
+                "prefer_document_and_notification_before_email": True,
+                "advance_only_when_step_checklist_complete": True,
+                "email_guard_enabled": op.get("email_guard_enabled", True),
+                "blocked_tools": list(op.get("blocked_tools") or []),
+            },
+            "operator_guidance": op.get("guidance") or "",
         }
 
         if isinstance(self.client, FakeGeminiClient) and not self.client.structured_queue:
-            return self._heuristic_proposal(
+            proposal = self._heuristic_proposal(
                 current_step=current_step,
                 allowed=allowed,
                 curr_idx=curr_idx,
                 allocation=allocation,
                 process_id=process_id,
                 run=run,
+            )
+            return self._refine_proposal(
+                proposal,
+                process_id=process_id,
+                run=run,
+                steps=steps,
+                curr_idx=curr_idx,
+                allowed=allowed,
             )
 
         system, user_prompt = self.prompts.render(
@@ -1222,32 +2171,35 @@ class ExecutionService:
         system += (
             f" You must select a tool from this exact allowed list: {allowed}. "
             "Never invent tools. Provide structured JSON matching ToolProposalOutput schema. "
-            "For multi-step commercial processes: execute all necessary sub-actions "
-            "before advancing next_step_index. "
-            "For RFQ steps: request quotes from at least 2 suppliers (supplier.request_quote), "
-            "collect the quotes (supplier.collect_quote for each request), and run "
-            "quotation.compare before advancing next_step_index. "
-            "For Order steps: draft the purchase order (purchase_order.create_draft), "
-            "submit it (purchase_order.submit), generate a summary doc (document.generate), "
-            "and dispatch notifications (notification.send / email.send / task.assign / "
-            "calendar.create_event). Only advance next_step_index when the step's complete "
-            "commercial outcome is achieved. "
-            "For email.send / email.create_draft / notification.send / supplier.request_quote: "
-            "write a professional subject and full body yourself (Gemini authors the message). "
-            "Use calendar.create_event for meetings/kickoffs (title, start_at ISO, "
-            "attendees emails). "
-            "Use task.assign to hand work to an employee (title, assignee_id email or id). "
-            "Use document.generate for RFQ packs, PO summaries, or memos (title, doc_type, "
-            "content). "
-            "CRITICAL: to_employee_id / attendees / assignee_id MUST prefer the Agent 2 allocated "
-            "recipient — use preferred_email_recipient.email or agent2_email_recipients / "
-            "allocated_resources. Never invent a random directory contact when Agent 2 "
-            "already allocated a supplier contact or employee for this process. "
-            "Always include a unique idempotency_key (uuid string) for side-effecting tools. "
-            "Prefer concrete side-effecting tools: email, RFQ, PO, notify, calendar, task, "
-            "document. "
-            "Do not propose dry-run placeholders."
+            "You are a disciplined execution agent — complete commercial outcomes, not inbox spam. "
+            "Read step_checklist.remaining and executed_tools before choosing. "
+            "Never propose a tool already listed in executed_tools unless it is required for a "
+            "distinct supplier/request (e.g. a second supplier.request_quote). "
+            "NEVER propose email.send if outbound_already_sent already contains email.send, "
+            "or if the same recipient was already emailed. Max two email.send calls per run. "
+            "Prefer this order: gather evidence → RFQ/collect/compare → draft/submit PO → "
+            "document.generate → task.assign / calendar.create_event → notification.send → "
+            "email.send only once as a final confirmation if still needed. "
+            "For RFQ steps: request quotes from at least 2 suppliers, collect each quote, "
+            "run quotation.compare, then set next_step_index to the next step. "
+            "For Order steps: create_draft → submit → document.generate, then one notification "
+            "or one confirmation email — only then advance next_step_index. "
+            "Keep next_step_index equal to current_step_index until step_checklist.complete "
+            "would be true after this tool. "
+            "Write professional subjects/bodies for outbound tools when needed. "
+            "CRITICAL: recipients MUST prefer preferred_email_recipient / Agent 2 allocations. "
+            "Use a STABLE idempotency_key derived from run+step+tool+recipient purpose — "
+            "do not invent a fresh random UUID for the same intent. "
+            "Prefer concrete operational tools (RFQ, PO, document, calendar, task, notify) "
+            "over repeated email.send. Do not propose dry-run placeholders."
         )
+        guidance = str(op.get("guidance") or "").strip()
+        if guidance:
+            system += (
+                f" OPERATOR GUIDANCE (highest priority for tool choice): {guidance} "
+            )
+        if blocked:
+            system += f" Do not propose these blocked tools: {sorted(blocked)}. "
 
         ctx = AgentExecutionContext(
             organization_id=self.organization_id,
@@ -1267,13 +2219,17 @@ class ExecutionService:
                 max_output_tokens=2048,
             )
             proposal: ToolProposalOutput = res.data
-            if proposal.tool_name not in allowed:
-                proposal.tool_name = allowed[0] if allowed else "company.employee_lookup"
-                proposal.rationale += " (Selected fallback tool from allowed catalog)"
-            return proposal
+            return self._refine_proposal(
+                proposal,
+                process_id=process_id,
+                run=run,
+                steps=steps,
+                curr_idx=curr_idx,
+                allowed=allowed,
+            )
         except Exception as exc:
             logger.warning("execution.propose_tool_failed", error=str(exc))
-            return self._heuristic_proposal(
+            proposal = self._heuristic_proposal(
                 current_step=current_step,
                 allowed=allowed,
                 curr_idx=curr_idx,
@@ -1281,6 +2237,14 @@ class ExecutionService:
                 error=str(exc),
                 process_id=process_id,
                 run=run,
+            )
+            return self._refine_proposal(
+                proposal,
+                process_id=process_id,
+                run=run,
+                steps=steps,
+                curr_idx=curr_idx,
+                allowed=allowed,
             )
 
     def _heuristic_proposal(
@@ -1762,10 +2726,7 @@ class ExecutionService:
     def _ensure_tool_args(
         self, tool_name: str, args: dict[str, Any], *, process_id: UUID, run: Any
     ) -> None:
-        if tool_name in TOOL_ARGS and "idempotency_key" in TOOL_ARGS[tool_name].model_fields:
-            if not args.get("idempotency_key"):
-                args["idempotency_key"] = str(uuid.uuid4())
-
+        # Resolve recipient/purpose first for tools that need it, then stamp a stable key.
         if tool_name in {"email.send", "email.create_draft"}:
             preferred = self._resolve_email_recipient_from_allocation(
                 process_id=process_id, run=run
@@ -1816,21 +2777,55 @@ class ExecutionService:
             args.pop("_allocated_recipient", None)
 
         elif tool_name == "supplier.request_quote":
-            if not args.get("supplier_id"):
+            supplier_id = str(args.get("supplier_id") or "").strip()
+            placeholder = supplier_id.lower() in {
+                "",
+                "sup-001",
+                "supp-001",
+                "supp-002",
+                "supplier-1",
+                "unknown",
+            }
+            if placeholder:
+                # Prefer suppliers discovered earlier in THIS run via supplier.search.
+                found_ids: list[str] = []
+                for row in self._run_invocation_rows(run):
+                    if row.get("tool_name") != "supplier.search":
+                        continue
+                    if row.get("status") not in {"executed", "replayed"}:
+                        continue
+                    data = ((row.get("result") or {}) if isinstance(row.get("result"), dict) else {})
+                    # result may be nested under data
+                    payload = data.get("data") if isinstance(data.get("data"), dict) else data
+                    hits = []
+                    if isinstance(payload, dict):
+                        hits = payload.get("suppliers") or payload.get("items") or []
+                    for hit in hits:
+                        if isinstance(hit, dict) and hit.get("id"):
+                            found_ids.append(str(hit["id"]))
                 allocation = self._latest_allocation(process_id) or {}
                 suppliers = [
                     a
                     for a in self._assignment_dicts(allocation)
                     if a.get("resource_type") == "supplier"
                 ]
-                if suppliers:
-                    args["supplier_id"] = str(suppliers[0].get("resource_id"))
-                else:
-                    dir_suppliers = self._directory_context().get("suppliers") or []
-                    if dir_suppliers:
-                        args["supplier_id"] = str(dir_suppliers[0].get("id"))
-                    else:
-                        args["supplier_id"] = "supp-001"
+                for s in suppliers:
+                    if s.get("resource_id"):
+                        found_ids.append(str(s.get("resource_id")))
+                dir_suppliers = self._directory_context().get("suppliers") or []
+                for s in dir_suppliers:
+                    if s.get("id"):
+                        found_ids.append(str(s["id"]))
+                # Prefer a supplier not already requested.
+                requested = {
+                    str(r.get("supplier_id"))
+                    for r in self.store.quote_requests.values()
+                    if r.get("organization_id") == str(self.organization_id)
+                }
+                unused = [sid for sid in found_ids if sid not in requested]
+                pick = (unused or found_ids or [None])[0]
+                if pick:
+                    args["supplier_id"] = pick
             args.setdefault("product_sku", "LAPTOP-PRO-01")
             args.setdefault("quantity", 5)
             preferred = self._resolve_email_recipient_from_allocation(
@@ -1983,8 +2978,72 @@ class ExecutionService:
             args.setdefault("title", "Process document")
             args.setdefault("doc_type", "memo")
             if not args.get("content"):
-                args["content"] = "Generated by Agent 4 during process execution."
+                # Richer default content from run context.
+                goal = ""
+                try:
+                    version = self.processes.get_version(
+                        process_id, getattr(run, "process_version_id", None)
+                    )
+                    goal = str((version.plan_snapshot or {}).get("goal") or "")
+                except Exception:  # noqa: BLE001
+                    goal = ""
+                pos = [
+                    p
+                    for p in self.store.purchase_orders.values()
+                    if p.get("organization_id") == str(self.organization_id)
+                ]
+                quotes = [
+                    q
+                    for q in self.store.quotations.values()
+                    if q.get("organization_id") == str(self.organization_id)
+                ]
+                lines = [
+                    f"Process goal: {goal or 'N/A'}",
+                    f"Quotations collected: {len(quotes)}",
+                    f"Purchase orders: {len(pos)}",
+                    "Generated by Agent 4 during controlled execution.",
+                ]
+                if pos:
+                    po = pos[-1]
+                    lines.insert(
+                        1,
+                        f"Latest PO {po.get('po_number') or po.get('id')} "
+                        f"status={po.get('status')} submitted={po.get('submitted')}",
+                    )
+                args["content"] = "\n".join(lines)
 
+        if tool_name in TOOL_ARGS and "idempotency_key" in TOOL_ARGS[tool_name].model_fields:
+            purpose_bits = [
+                self._normalize_recipient(
+                    args.get("to_employee_id")
+                    or args.get("user_id")
+                    or args.get("assignee_id")
+                    or args.get("contact_email")
+                    or args.get("supplier_id")
+                    or args.get("purchase_order_id")
+                    or args.get("request_id")
+                    or args.get("title")
+                    or args.get("subject")
+                    or "default"
+                )
+            ]
+            if tool_name == "supplier.request_quote":
+                purpose_bits.append(str(args.get("product_sku") or "sku"))
+            if tool_name == "document.generate":
+                purpose_bits.append(str(args.get("doc_type") or "memo"))
+            purpose = "|".join(purpose_bits)
+            existing = str(args.get("idempotency_key") or "").strip()
+            # Replace missing keys and raw UUIDs the model invents; keep explicit operator keys.
+            is_raw_uuid = bool(
+                re.fullmatch(
+                    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
+                    existing,
+                )
+            )
+            if not existing or is_raw_uuid:
+                args["idempotency_key"] = self._stable_idempotency_key(
+                    run=run, tool_name=tool_name, purpose=purpose
+                )
     def _compose_email_with_gemini(
         self, *, process_id: UUID, run: Any, args: dict[str, Any]
     ) -> dict[str, str] | None:
