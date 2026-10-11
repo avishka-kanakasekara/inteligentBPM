@@ -733,6 +733,9 @@ export function DiscoveryChatPage() {
                 Execution Steps ({draftedPlan.plan?.steps?.length || 0})
               </h4>
               <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+                {(draftedPlan.plan?.steps || []).length === 0 ? (
+                  <p className="muted">This draft has no execution steps yet.</p>
+                ) : null}
                 {(draftedPlan.plan?.steps || []).map((step, idx) => (
                   <div
                     key={step.step_id || idx}
