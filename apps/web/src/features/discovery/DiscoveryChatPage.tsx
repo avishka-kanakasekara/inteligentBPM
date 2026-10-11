@@ -407,6 +407,7 @@ export function DiscoveryChatPage() {
                   setPendingDocs([]);
                   setUploadError(null);
                   setActionError(null);
+                  setActionNotice(null);
                 }}
                 style={{ flex: 1, maxWidth: "400px" }}
               >
