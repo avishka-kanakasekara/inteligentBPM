@@ -788,6 +788,7 @@ class PolicyRepository(TenantRepository):
             } and value is not None:
                 setattr(record, key, value)
         record.updated_at = utcnow()
+        self.store.policies[record.id] = record
         return record
 
 
