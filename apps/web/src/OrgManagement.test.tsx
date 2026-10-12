@@ -49,7 +49,7 @@ describe("organization management UI", () => {
     const user = await signInAsOwner();
     await user.click(screen.getByRole("link", { name: /^people$/i }));
     expect(await screen.findByRole("heading", { name: /employees and managers/i })).toBeInTheDocument();
-    expect(await screen.findByText(/alex owner/i)).toBeInTheDocument();
+    expect(await screen.findByRole("row", { name: /alex owner/i })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: /import employees/i })).toBeInTheDocument();
   });
 

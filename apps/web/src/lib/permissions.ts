@@ -138,6 +138,7 @@ export const PLAN_FEATURES: Record<PlanCode, ReadonlySet<string>> = {
   ]),
 };
 
-export function planHasFeature(plan: PlanCode, feature: string): boolean {
+export function planHasFeature(plan: PlanCode | null | undefined, feature: string): boolean {
+  if (!plan) return false;
   return PLAN_FEATURES[plan]?.has(feature) ?? false;
 }

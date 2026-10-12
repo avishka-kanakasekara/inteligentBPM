@@ -7,6 +7,7 @@ import { LoadingState } from "../../components/ui/LoadingState";
 import { RetryState } from "../../components/ui/RetryState";
 import { RequirePermission } from "../../components/RouteGuards";
 import { apiClient } from "../../lib/apiClient";
+import { organizationDisplayName, organizationPlanLabel } from "../../lib/organizationDisplay";
 import { PERMISSIONS } from "../../lib/permissions";
 import { useOrganization } from "../../providers/OrganizationProvider";
 import { useAuth } from "../../providers/AuthProvider";
@@ -84,7 +85,8 @@ export function CompanyProfilePage() {
     <section>
       <h1>Company profile</h1>
       <p className="lede">
-        Legal identity, tax details, and locale settings for {activeOrganization?.name}.
+        Legal identity, tax details, and locale settings for{" "}
+        {activeOrganization ? organizationDisplayName(activeOrganization) : "this workspace"}.
       </p>
 
       <RequirePermission
@@ -159,7 +161,7 @@ export function CompanyProfilePage() {
       <dl className="status-grid" style={{ marginTop: "1.5rem" }}>
         <div>
           <dt>Plan</dt>
-          <dd>{activeOrganization?.plan_code}</dd>
+          <dd>{organizationPlanLabel(activeOrganization?.plan_code) ?? "—"}</dd>
         </div>
         <div>
           <dt>Your role</dt>

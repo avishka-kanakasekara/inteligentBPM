@@ -11,19 +11,21 @@ import {
 } from "react";
 import type { Organization } from "@bpm/frontend-types";
 import { apiClient } from "../lib/apiClient";
+import { authorizedOrganizationId } from "../lib/organizationDisplay";
 import { permissionsForRole, planHasFeature, type Permission } from "../lib/permissions";
 import { sessionStore } from "../lib/sessionStore";
 import { useAuth } from "./AuthProvider";
 
 type OrganizationContextValue = {
   organizations: Organization[];
+  canCreateOrganization: boolean;
   activeOrganization: Organization | null;
   isLoading: boolean;
   error: Error | null;
-  setActiveOrganizationId: (id: string) => void;
+  setActiveOrganizationId: (id: string, knownOrganizations?: Organization[]) => void;
   can: (permission: Permission) => boolean;
   hasFeature: (feature: string) => boolean;
-  refetch: () => Promise<unknown>;
+  refetch: () => Promise<{ data?: Organization[] }>;
 };
 
 const OrganizationContext = createContext<OrganizationContextValue | null>(null);
@@ -57,28 +59,40 @@ export function OrganizationProvider({ children }: { children: ReactNode }) {
     },
   });
 
-  const organizations = query.data ?? [];
+  const organizations = query.data?.organizations ?? [];
+  const canCreateOrganization = query.data?.canCreateOrganization ?? true;
   const activeOrganization =
     organizations.find((org) => org.id === activeId) ?? organizations[0] ?? null;
 
-  if (activeOrganization && sessionStore.getOrganizationId() !== activeOrganization.id) {
-    sessionStore.setOrganizationId(activeOrganization.id);
-  }
-
   useEffect(() => {
-    if (activeOrganization && activeId !== activeOrganization.id) {
-      setActiveId(activeOrganization.id);
+    if (!query.isSuccess) return;
+    const allowed = query.data?.organizations ?? [];
+    const stored = sessionStore.getOrganizationId();
+    const selected =
+      allowed.find((org) => org.id === stored)?.id ?? allowed[0]?.id ?? null;
+    if (selected) {
+      if (stored !== selected) sessionStore.setOrganizationId(selected);
+      if (activeId !== selected) setActiveId(selected);
+      return;
     }
-  }, [activeOrganization, activeId]);
+    if (stored) sessionStore.setOrganizationId(null);
+    if (activeId) setActiveId(null);
+  }, [query.isSuccess, query.data, activeId]);
 
-  const setActiveOrganizationId = useCallback((id: string) => {
-    sessionStore.setOrganizationId(id);
-    setActiveId(id);
-  }, []);
+  const setActiveOrganizationId = useCallback(
+    (id: string, knownOrganizations?: Organization[]) => {
+      const allowed = authorizedOrganizationId(id, knownOrganizations ?? organizations);
+      if (!allowed) return;
+      sessionStore.setOrganizationId(allowed);
+      setActiveId(allowed);
+    },
+    [organizations],
+  );
 
   const value = useMemo<OrganizationContextValue>(
     () => ({
       organizations,
+      canCreateOrganization,
       activeOrganization,
       isLoading: query.isLoading,
       error: query.error,
@@ -91,9 +105,12 @@ export function OrganizationProvider({ children }: { children: ReactNode }) {
         activeOrganization
           ? planHasFeature(activeOrganization.plan_code, feature)
           : false,
-      refetch: () => query.refetch(),
+      refetch: async () => {
+        const result = await query.refetch();
+        return { data: result.data?.organizations };
+      },
     }),
-    [organizations, activeOrganization, query, setActiveOrganizationId],
+    [organizations, canCreateOrganization, activeOrganization, query, setActiveOrganizationId],
   );
 
   return (

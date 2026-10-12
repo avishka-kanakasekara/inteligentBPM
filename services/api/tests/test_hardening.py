@@ -46,6 +46,59 @@ def test_cors_allowlist(client: TestClient) -> None:
     assert response.headers.get("access-control-allow-origin") == "http://localhost:5173"
 
 
+@pytest.mark.parametrize("origin", ["http://127.0.0.1:5173", "http://localhost:5173"])
+def test_chat_preflight_allows_local_frontend_origins(client: TestClient, origin: str) -> None:
+    response = client.options(
+        "/v1/processes/00000000-0000-0000-0000-000000000001/chat",
+        headers={
+            "Origin": origin,
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "authorization,content-type,x-organization-id",
+        },
+    )
+    assert response.status_code == 200
+    assert response.headers.get("access-control-allow-origin") == origin
+    assert response.headers.get("access-control-allow-credentials") == "true"
+    allowed_headers = response.headers.get("access-control-allow-headers", "").lower()
+    assert "authorization" in allowed_headers
+    assert "content-type" in allowed_headers
+    assert "x-organization-id" in allowed_headers
+
+
+def test_chat_preflight_rejects_unknown_origin(client: TestClient) -> None:
+    response = client.options(
+        "/v1/processes/00000000-0000-0000-0000-000000000001/chat",
+        headers={
+            "Origin": "http://evil.example",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "authorization,content-type",
+        },
+    )
+    assert response.status_code == 400
+    assert response.headers.get("access-control-allow-origin") is None
+
+
+def test_chat_unhandled_error_keeps_cors_headers(
+    client: TestClient,
+    auth_headers_a: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def explode(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("discovery_messages unavailable")
+
+    monkeypatch.setattr("app.api.v1.discovery.DiscoveryService.chat", explode)
+    origin = "http://127.0.0.1:5173"
+    response = client.post(
+        "/v1/processes/00000000-0000-0000-0000-000000000001/chat",
+        headers={**auth_headers_a, "Origin": origin},
+        json={"message": "hello"},
+    )
+    assert response.status_code == 500
+    assert response.headers.get("access-control-allow-origin") == origin
+    assert response.headers.get("access-control-allow-credentials") == "true"
+    assert response.json()["error"]["code"] == "INTERNAL_ERROR"
+
+
 def test_request_size_limit(client: TestClient, auth_headers_a: dict[str, str]) -> None:
     # Oversized Content-Length is rejected before body read
     response = client.post(

@@ -5,6 +5,7 @@ import { EmptyState } from "../../components/ui/EmptyState";
 import { LoadingState } from "../../components/ui/LoadingState";
 import { RetryState } from "../../components/ui/RetryState";
 import { apiClient } from "../../lib/apiClient";
+import { organizationDisplayName, organizationPlanLabel } from "../../lib/organizationDisplay";
 import { useAuth } from "../../providers/AuthProvider";
 import { useOrganization } from "../../providers/OrganizationProvider";
 
@@ -13,6 +14,7 @@ export function OrganizationSelectPage() {
   const { signOut, user } = useAuth();
   const {
     organizations,
+    canCreateOrganization,
     activeOrganization,
     setActiveOrganizationId,
     isLoading,
@@ -39,8 +41,8 @@ export function OrganizationSelectPage() {
         name: newOrgName.trim(),
         plan_code: "pro",
       });
-      await refetch();
-      setActiveOrganizationId(created.id);
+      const refreshed = await refetch();
+      setActiveOrganizationId(created.id, refreshed.data ?? []);
       navigate("/dashboard");
     } catch (err: unknown) {
       setCreateError(err instanceof Error ? err.message : "Failed to create organization");
@@ -84,10 +86,12 @@ export function OrganizationSelectPage() {
                       navigate("/dashboard");
                     }}
                   >
-                    <span className="org-pick-copy">
-                      <strong>{org.name}</strong>
-                      <span className="org-pick-meta">
-                        {org.plan_code} · {org.membership_role}
+                    <span>
+                      <strong>{organizationDisplayName(org)}</strong>
+                      <span className="muted tight">
+                        {organizationPlanLabel(org.plan_code)
+                          ? `${organizationPlanLabel(org.plan_code)} · ${org.membership_role}`
+                          : org.membership_role}
                       </span>
                     </span>
                     <span className="org-enter">Enter</span>
@@ -95,37 +99,46 @@ export function OrganizationSelectPage() {
                 </li>
               ))}
             </ul>
-          ) : (
+          ) : canCreateOrganization ? (
             <EmptyState
               title="No organizations yet"
               description="Create your company workspace below to start discovery and execution."
             />
+          ) : (
+            <EmptyState
+              title="No workspace assigned"
+              description="No workspace is assigned to this account yet. An administrator must grant access before you can continue."
+            />
           )}
 
-          <form className="org-create" onSubmit={(e) => void handleCreateOrg(e)}>
-            <h2>Create a company</h2>
-            <p className="muted">Add a workspace, then open it.</p>
-            {createError ? (
-              <p className="field-error" role="alert">
-                {createError}
+          {canCreateOrganization ? (
+            <form className="org-create" onSubmit={(e) => void handleCreateOrg(e)}>
+              <h2>Create a company instance</h2>
+              <p className="muted">
+                Sets up a tenant workspace for employees, suppliers, policies, and agent runs.
               </p>
-            ) : null}
-            <div className="org-create-row">
-              <input
-                id="org-name-input"
-                type="text"
-                value={newOrgName}
-                onChange={(e) => setNewOrgName(e.target.value)}
-                placeholder="e.g. Acme Corporation"
-                required
-                disabled={isCreating}
-                aria-label="Organization name"
-              />
-              <button type="submit" disabled={isCreating || !newOrgName.trim()}>
-                {isCreating ? "Creating…" : "Create & enter"}
-              </button>
-            </div>
-          </form>
+              {createError ? (
+                <p className="field-error" role="alert">
+                  {createError}
+                </p>
+              ) : null}
+              <div className="org-create-row">
+                <input
+                  id="org-name-input"
+                  type="text"
+                  value={newOrgName}
+                  onChange={(e) => setNewOrgName(e.target.value)}
+                  placeholder="e.g. Acme Corporation"
+                  required
+                  disabled={isCreating}
+                  aria-label="Organization name"
+                />
+                <button type="submit" disabled={isCreating || !newOrgName.trim()}>
+                  {isCreating ? "Creating…" : "Create & enter"}
+                </button>
+              </div>
+            </form>
+          ) : null}
         </div>
       </section>
     </main>

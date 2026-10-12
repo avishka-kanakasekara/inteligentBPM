@@ -18,7 +18,7 @@ export function LoginPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const from = (location.state as { from?: string } | null)?.from ?? "/organizations";
-  const confirmed = new URLSearchParams(location.search).get("confirmed") === "1";
+  const awaitingConfirmation = new URLSearchParams(location.search).get("confirm") === "1";
   const [showPassword, setShowPassword] = useState(false);
 
   useEffect(() => {
@@ -53,9 +53,9 @@ export function LoginPage() {
         </p>
       }
     >
-      {confirmed ? (
+      {awaitingConfirmation ? (
         <p className="auth-banner" role="status">
-          Email confirmed. Sign in to continue.
+          Confirm your email from the link we sent, then sign in with the same password.
         </p>
       ) : null}
 

@@ -74,6 +74,12 @@ class OrganizationRepository:
         return self.store.organizations.get(organization_id)
 
     def create(self, *, name: str, plan_code: str, owner_user_id: UUID) -> OrganizationRecord:
+        from app.database.postgres_persistence import (
+            persist_hosted_workspace,
+            workspace_create_backend,
+        )
+
+        backend = workspace_create_backend()
         with self.store.lock:
             now = utcnow()
             org_id = new_id()
@@ -103,8 +109,13 @@ class OrganizationRepository:
                 created_at=now,
                 updated_at=now,
             )
-            self.store.organizations[org_id] = org
-            self.store.memberships[membership.id] = membership
+            if backend == "tenants":
+                persist_hosted_workspace(org, membership)
+                dict.__setitem__(self.store.organizations, org_id, org)
+                dict.__setitem__(self.store.memberships, membership.id, membership)
+            else:
+                self.store.organizations[org_id] = org
+                self.store.memberships[membership.id] = membership
         # Seed subscription outside lock to avoid nested entitlement store contention
         from app.billing.service import EntitlementService
 

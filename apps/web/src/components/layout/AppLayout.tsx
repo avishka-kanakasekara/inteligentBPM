@@ -4,6 +4,7 @@ import { BrandLogo } from "../brand/BrandLogo";
 import { NotificationCenter } from "../notifications/NotificationCenter";
 import { useAuth } from "../../providers/AuthProvider";
 import { useOrganization } from "../../providers/OrganizationProvider";
+import { organizationDisplayName } from "../../lib/organizationDisplay";
 import { PERMISSIONS } from "../../lib/permissions";
 
 const NAV_GROUPS = [
@@ -257,8 +258,13 @@ export function AppLayout() {
 
       <nav id="primary-nav" className={navOpen ? "side-nav is-open" : "side-nav"} aria-label="Primary">
         <div className="side-brand">
-          <BrandLogo />
-          <div className="brand-org">{activeOrganization?.name ?? "No organization"}</div>
+          <span className="brand-mark" aria-hidden="true" />
+          <div>
+            <div className="brand-name">Intelligent BPM</div>
+            <div className="brand-org">
+              {activeOrganization ? organizationDisplayName(activeOrganization) : "No organization"}
+            </div>
+          </div>
         </div>
 
         {NAV_GROUPS.map((group) => (
@@ -317,7 +323,9 @@ export function AppLayout() {
         </button>
         <div className="topbar-context">
           <div className="breadcrumbs" aria-label="Breadcrumb">
-            <span>{activeOrganization?.name ?? "Organization"}</span>
+            <span>
+              {activeOrganization ? organizationDisplayName(activeOrganization) : "Organization"}
+            </span>
             <span aria-hidden="true">/</span>
             <strong>{pageTitle}</strong>
           </div>

@@ -62,58 +62,54 @@ class CostCenterModel(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class RoleModel(Base):
+    """Hosted public.roles. tenant_id stays the physical tenant key."""
+
+    __tablename__ = "roles"
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    tenant_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
+    code: Mapped[str] = mapped_column(Text, nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+
+
 class EmployeeModel(Base):
+    """Hosted public.employees. organization_id is the tenant_id column."""
+
     __tablename__ = "employees"
 
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
-    organization_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
-    user_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
+    organization_id: Mapped[UUID] = mapped_column(
+        "tenant_id", PGUUID(as_uuid=True), nullable=False
+    )
     employee_code: Mapped[str | None] = mapped_column(Text)
     full_name: Mapped[str] = mapped_column(Text, nullable=False)
     email: Mapped[str] = mapped_column(Text, nullable=False)
-    title: Mapped[str | None] = mapped_column(Text)
+    phone: Mapped[str | None] = mapped_column(Text)
     department_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
+    role_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
+    manager_employee_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
     status: Mapped[str] = mapped_column(Text, nullable=False)
     is_manager: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    role_code: Mapped[str | None] = mapped_column(Text)
-    approval_authority_limit: Mapped[float | None] = mapped_column(Numeric(18, 2))
-    approval_authority_currency: Mapped[str] = mapped_column(Text, nullable=False, default="USD")
-    phone: Mapped[str | None] = mapped_column(Text)
     employment_type: Mapped[str] = mapped_column(Text, nullable=False, default="full_time")
-    join_date: Mapped[date | None] = mapped_column(Date)
-    manager_employee_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
-    team: Mapped[str | None] = mapped_column(Text)
-    business_unit: Mapped[str | None] = mapped_column(Text)
-    location: Mapped[str | None] = mapped_column(Text)
     reporting_level: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     primary_skills: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
     secondary_skills: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
-    certifications: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
-    years_of_experience: Mapped[float | None] = mapped_column(Numeric(5, 1))
     skill_level: Mapped[str] = mapped_column(Text, nullable=False, default="intermediate")
     availability_percent: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False, default=100)
-    weekly_capacity_hours: Mapped[float] = mapped_column(Numeric(6, 2), nullable=False, default=40)
+    weekly_capacity_hours: Mapped[float] = mapped_column(Numeric(8, 2), nullable=False, default=40)
     baseline_workload_percent: Mapped[float] = mapped_column(
         Numeric(5, 2), nullable=False, default=0
     )
     current_workload_percent: Mapped[float] = mapped_column(
         Numeric(5, 2), nullable=False, default=0
     )
-    cost_per_hour: Mapped[float | None] = mapped_column(Numeric(18, 2))
-    monthly_cost: Mapped[float | None] = mapped_column(Numeric(18, 2))
+    cost_per_hour: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     max_allocation_percent: Mapped[float] = mapped_column(
         Numeric(5, 2), nullable=False, default=100
     )
+    approval_authority_limit: Mapped[float | None] = mapped_column(Numeric(12, 2))
     approval_tier: Mapped[str] = mapped_column(Text, nullable=False, default="none")
-    can_approve_procurement: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    can_approve_budget: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    delegation_authority: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    tasks_completed: Mapped[int | None] = mapped_column(Integer)
-    avg_task_completion_hours: Mapped[float | None] = mapped_column(Numeric(8, 2))
-    sla_compliance_percent: Mapped[float | None] = mapped_column(Numeric(5, 2))
-    performance_score: Mapped[float | None] = mapped_column(Numeric(5, 2))
-    metadata_json: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, nullable=False, default=dict)
-    row_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
@@ -254,6 +250,37 @@ class PolicyModel(Base):
     )
     status: Mapped[str] = mapped_column(Text, nullable=False)
     row_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class TenantModel(Base):
+    """Hosted public.tenants.
+
+    Verified columns are id, code, name, is_active, created_at, and updated_at.
+    There is no slug, plan, or status column.
+    """
+
+    __tablename__ = "tenants"
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    code: Mapped[str | None] = mapped_column(Text)
+    name: Mapped[str | None] = mapped_column(Text)
+    is_active: Mapped[bool | None] = mapped_column(Boolean)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class TenantMembershipModel(Base):
+    """Auth user membership in a hosted tenant. user_id is the JWT sub."""
+
+    __tablename__ = "tenant_memberships"
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    tenant_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
+    user_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
+    role: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="active")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 

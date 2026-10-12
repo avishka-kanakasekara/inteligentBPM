@@ -130,7 +130,7 @@ function forceLogoutToLogin(): void {
 
 async function request<T>(
   path: string,
-  parse: (data: unknown) => T,
+  parse: (data: unknown, response: Response) => T,
   init?: RequestOptions,
 ): Promise<T> {
   if (useMock()) {
@@ -186,7 +186,7 @@ async function request<T>(
     });
   }
 
-  return parse(json);
+  return parse(json, response);
 }
 
 const EmployeePageSchema = PageSchema(EmployeeSchema);
@@ -206,10 +206,20 @@ export const apiClient = {
   getReadiness(): Promise<ReadinessResponse> {
     return request("/readyz", (data) => ReadinessResponseSchema.parse(data));
   },
-  listOrganizations(): Promise<Organization[]> {
-    return request("/auth/organizations", (data) =>
-      OrganizationSchema.array().parse(data),
-    );
+  listOrganizations(): Promise<{
+    organizations: Organization[];
+    canCreateOrganization: boolean;
+  }> {
+    if (useMock()) {
+      return mockApi.request<unknown>("/auth/organizations").then((data) => ({
+        organizations: OrganizationSchema.array().parse(data),
+        canCreateOrganization: true,
+      }));
+    }
+    return request("/auth/organizations", (data, response) => ({
+      organizations: OrganizationSchema.array().parse(data),
+      canCreateOrganization: response.headers.get("X-Organization-Create-Supported") !== "false",
+    }));
   },
   createOrganization(body: { name: string; plan_code?: string }): Promise<Organization> {
     return request(
