@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { PageHeader } from "../../components/ui/PageHeader";
+import { organizationDisplayName } from "../../lib/organizationDisplay";
 import { useOrganization } from "../../providers/OrganizationProvider";
 import { useAuth } from "../../providers/AuthProvider";
 
@@ -71,7 +72,7 @@ export function SettingsPage() {
           <h2>{user?.displayName || user?.email || "Signed-in user"}</h2>
           <p>
             {user?.email}
-            {activeOrganization ? ` · ${activeOrganization.name}` : ""}
+            {activeOrganization ? ` · ${organizationDisplayName(activeOrganization)}` : ""}
           </p>
           <div className="badge-row">
             {activeOrganization?.membership_role ? (
@@ -179,9 +180,13 @@ export function SettingsPage() {
               <div className="settings-org-card">
                 <div>
                   <p className="eyebrow">Active workspace</p>
-                  <h4>{activeOrganization?.name ?? "No organization selected"}</h4>
+                  <h4>
+                    {activeOrganization
+                      ? organizationDisplayName(activeOrganization)
+                      : "No organization selected"}
+                  </h4>
                   <p className="muted">
-                    {activeOrganization?.slug ?? "—"} · {organizations.length} membership
+                    {activeOrganization?.slug.trim() || "—"} · {organizations.length} membership
                     {organizations.length === 1 ? "" : "s"}
                   </p>
                 </div>
