@@ -11,6 +11,7 @@ import {
   isSupabaseAuthEnabled,
   signInWithPassword,
   signUpWithPassword,
+  updateDisplayName,
 } from "../lib/supabaseAuth";
 import { findMockAccount, saveMockAccount } from "../lib/mockAccounts";
 import { sessionStore } from "../lib/sessionStore";
@@ -31,6 +32,7 @@ type AuthContextValue = {
     fullName: string;
   }) => Promise<SignUpOutcome>;
   signOut: () => Promise<void>;
+  updateProfile: (input: { displayName: string }) => Promise<void>;
   authError: string | null;
   clearAuthError: () => void;
 };
@@ -145,6 +147,27 @@ export function AuthProvider({ children }: AuthProviderProps) {
     [],
   );
 
+  const updateProfile = useCallback(
+    async (input: { displayName: string }) => {
+      const displayName = input.displayName.trim().replace(/\s+/g, " ");
+      if (!user || !token) throw new Error("Sign in before updating your profile");
+      if (!displayName) throw new Error("Display name is required");
+      if (displayName.length > 80) throw new Error("Display name must be 80 characters or fewer");
+
+      const mockSession = token.startsWith("mock-access-token:");
+      if (isSupabaseAuthEnabled() && !mockSession) {
+        await updateDisplayName(token, displayName);
+      } else {
+        saveMockAccount({ id: user.id, email: user.email, displayName });
+      }
+
+      const nextUser: User = { ...user, displayName };
+      sessionStore.setUser(nextUser);
+      setUser(nextUser);
+    },
+    [token, user],
+  );
+
   const signOut = useCallback(async () => {
     setIsLoading(true);
     try {
@@ -166,10 +189,11 @@ export function AuthProvider({ children }: AuthProviderProps) {
       signIn,
       signUp,
       signOut,
+      updateProfile,
       authError,
       clearAuthError,
     }),
-    [user, token, isLoading, signIn, signUp, signOut, authError, clearAuthError],
+    [user, token, isLoading, signIn, signUp, signOut, updateProfile, authError, clearAuthError],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
