@@ -2,6 +2,7 @@ import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { NotificationCenter } from "../notifications/NotificationCenter";
 import { useAuth } from "../../providers/AuthProvider";
 import { useOrganization } from "../../providers/OrganizationProvider";
+import { organizationDisplayName } from "../../lib/organizationDisplay";
 import { PERMISSIONS } from "../../lib/permissions";
 
 const NAV_GROUPS = [
@@ -235,7 +236,9 @@ export function AppLayout() {
           <span className="brand-mark" aria-hidden="true" />
           <div>
             <div className="brand-name">Intelligent BPM</div>
-            <div className="brand-org">{activeOrganization?.name ?? "No organization"}</div>
+            <div className="brand-org">
+              {activeOrganization ? organizationDisplayName(activeOrganization) : "No organization"}
+            </div>
           </div>
         </div>
 
@@ -285,7 +288,9 @@ export function AppLayout() {
       <header className="topbar">
         <div className="topbar-context">
           <div className="breadcrumbs" aria-label="Breadcrumb">
-            <span>{activeOrganization?.name ?? "Organization"}</span>
+            <span>
+              {activeOrganization ? organizationDisplayName(activeOrganization) : "Organization"}
+            </span>
             <span aria-hidden="true">/</span>
             <strong>{pageTitle}</strong>
           </div>
