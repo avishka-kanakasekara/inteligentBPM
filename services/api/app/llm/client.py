@@ -96,6 +96,20 @@ class FakeGeminiClient:
         )
 
 
+def _schema_for_developer_api(schema: Any) -> Any:
+    """Drop JSON Schema fields the Gemini Developer API rejects."""
+    if isinstance(schema, dict):
+        cleaned = {
+            key: _schema_for_developer_api(value)
+            for key, value in schema.items()
+            if key != "additionalProperties"
+        }
+        return cleaned
+    if isinstance(schema, list):
+        return [_schema_for_developer_api(item) for item in schema]
+    return schema
+
+
 class VertexGeminiClient:
     """Official Google Gen AI Python SDK configured for Vertex AI (ADC / WIF)."""
 
@@ -112,12 +126,6 @@ class VertexGeminiClient:
     def _get_client(self) -> Any:
         if self._client is not None:
             return self._client
-        if not self.settings.google_cloud_project:
-            raise LLMError(
-                "GOOGLE_CLOUD_PROJECT is required for VertexGeminiClient",
-                kind=LLMFailureKind.MODEL_UNAVAILABLE,
-                retryable=False,
-            )
         try:
             from google import genai
             from google.genai import types
@@ -127,6 +135,21 @@ class VertexGeminiClient:
                 kind=LLMFailureKind.PERMANENT,
                 retryable=False,
             ) from exc
+
+        http_options = types.HttpOptions(
+            timeout=int(self.settings.gemini_timeout_seconds * 1000)
+        )
+        api_key = (self.settings.gemini_api_key or "").strip()
+        if api_key and self.settings.gemini_client_mode != "vertex":
+            self._client = genai.Client(api_key=api_key, http_options=http_options)
+            return self._client
+
+        if not self.settings.google_cloud_project:
+            raise LLMError(
+                "GOOGLE_CLOUD_PROJECT is required for VertexGeminiClient",
+                kind=LLMFailureKind.MODEL_UNAVAILABLE,
+                retryable=False,
+            )
 
         if self.settings.google_application_credentials:
             raw_path = Path(self.settings.google_application_credentials)
@@ -147,9 +170,6 @@ class VertexGeminiClient:
             if resolved_cred:
                 os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(resolved_cred)
 
-        http_options = types.HttpOptions(
-            timeout=int(self.settings.gemini_timeout_seconds * 1000)
-        )
         self._client = genai.Client(
             vertexai=bool(self.settings.google_genai_use_vertexai),
             project=self.settings.google_cloud_project,
@@ -188,9 +208,23 @@ class VertexGeminiClient:
         if request.response_mime_type:
             config_kwargs["response_mime_type"] = request.response_mime_type
         if request.response_schema is not None:
-            config_kwargs["response_schema"] = request.response_schema
+            schema = request.response_schema
+            if self.settings.gemini_uses_api_key():
+                schema = _schema_for_developer_api(schema)
+            config_kwargs["response_schema"] = schema
         if request.tools:
-            config_kwargs["tools"] = self._to_tools(request.tools, types)
+            tools = request.tools
+            if self.settings.gemini_uses_api_key():
+                tools = [
+                    {
+                        **tool,
+                        "parameters": _schema_for_developer_api(tool.get("parameters")),
+                    }
+                    if tool.get("parameters") is not None
+                    else tool
+                    for tool in tools
+                ]
+            config_kwargs["tools"] = self._to_tools(tools, types)
         if request.timeout_seconds is not None:
             config_kwargs["http_options"] = types.HttpOptions(
                 timeout=int(request.timeout_seconds * 1000)

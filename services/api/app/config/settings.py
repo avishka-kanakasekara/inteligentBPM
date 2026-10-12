@@ -85,6 +85,9 @@ class Settings(BaseSettings):
     gemini_circuit_failure_threshold: int = 5
     gemini_circuit_reset_seconds: float = 60.0
     gemini_client_mode: Literal["auto", "vertex", "fake"] = "auto"
+    # Gemini Developer API key. When set in auto mode, calls use this key
+    # instead of Vertex AI project credentials.
+    gemini_api_key: str | None = None
 
     # Integration providers (mock by default; real only when credentials present)
     integrations_mode: Literal["mock", "auto"] = "mock"
@@ -145,14 +148,25 @@ class Settings(BaseSettings):
             return max(self.rate_limit_per_minute, 10_000)
         return self.rate_limit_per_minute
 
+    def gemini_uses_api_key(self) -> bool:
+        return bool(self.gemini_api_key and self.gemini_api_key.strip()) and (
+            self.gemini_client_mode != "vertex"
+        )
+
     def gemini_configured(self) -> bool:
-        return bool(self.google_cloud_project) and bool(
+        has_model = bool(
             self.gemini_planner_model
             or self.gemini_resource_model
             or self.gemini_risk_model
             or self.gemini_execution_model
             or self.gemini_model_id
+            or self.gemini_fallback_model
         )
+        if not has_model:
+            return False
+        if self.gemini_uses_api_key():
+            return True
+        return bool(self.google_cloud_project)
 
     def missing_required_for_runtime(self) -> list[str]:
         missing: list[str] = []
