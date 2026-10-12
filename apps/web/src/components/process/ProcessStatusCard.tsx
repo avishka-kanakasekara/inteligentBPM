@@ -197,7 +197,13 @@ function summarizeExecution(data: any): string | null {
   return lines.join("\n");
 }
 
-export function ProcessStatusCard({ process }: { process: ProcessSummary }) {
+export function ProcessStatusCard({
+  process,
+  readOnly = false,
+}: {
+  process: ProcessSummary;
+  readOnly?: boolean;
+}) {
   const queryClient = useQueryClient();
   const [busy, setBusy] = useState<ActionKey | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -548,6 +554,7 @@ export function ProcessStatusCard({ process }: { process: ProcessSummary }) {
         </p>
       ) : null}
 
+      {readOnly ? null : (
       <div
         className="card-actions"
         style={{
@@ -608,22 +615,9 @@ export function ProcessStatusCard({ process }: { process: ProcessSummary }) {
         <button
           type="button"
           onClick={() => setOpenExecutionHub(true)}
-          style={{
-            background: "linear-gradient(135deg, var(--color-primary, #2f5bda), var(--color-primary-hover, #2449b8))",
-            color: "#ffffff",
-            border: "none",
-            borderRadius: "6px",
-            padding: "0.42rem 0.85rem",
-            fontSize: "0.82rem",
-            fontWeight: 700,
-            cursor: "pointer",
-            boxShadow: "0 2px 6px rgba(47, 91, 218, 0.25)",
-            display: "inline-flex",
-            alignItems: "center",
-            gap: "0.35rem",
-          }}
+          className="agent4-open-hub-btn"
         >
-          ⚡ Agent 4 Execution Hub
+          Open Agent 4
         </button>
 
         <button
@@ -646,8 +640,9 @@ export function ProcessStatusCard({ process }: { process: ProcessSummary }) {
           {busy === "execute" ? "Executing…" : "Quick Auto-Run"}
         </button>
       </div>
+      )}
 
-      {openExecutionHub && (
+      {!readOnly && openExecutionHub && (
         <Agent4ExecutionHub
           process={process}
           onClose={() => setOpenExecutionHub(false)}

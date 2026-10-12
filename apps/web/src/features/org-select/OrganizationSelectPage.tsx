@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { BrandLogo } from "../../components/brand/BrandLogo";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { LoadingState } from "../../components/ui/LoadingState";
 import { RetryState } from "../../components/ui/RetryState";
@@ -58,18 +59,19 @@ export function OrganizationSelectPage() {
   return (
     <main className="auth-stage org-stage">
       <section className="org-workspace" aria-labelledby="org-title">
-        <aside className="org-intro">
-          <span className="brand-mark" aria-hidden="true" />
-          <p className="auth-brand-name">Intelligent BPM</p>
-          <h1 id="org-title">Select organization</h1>
-          <p className="auth-subtitle">
-            Signed in as <strong>{user?.displayName || user?.email}</strong>
-            {user?.email ? ` · ${user.email}` : ""}. Choose a workspace to continue operations.
-          </p>
-          <button type="button" className="ghost-btn" style={{ marginTop: "1.25rem" }} onClick={() => void handleSignOut()}>
+        <header className="org-header">
+          <BrandLogo variant="mark" className="brand-logo-org" />
+          <div className="org-header-copy">
+            <h1 id="org-title">Select organization</h1>
+            <p className="org-signed-in">
+              Signed in as <strong>{user?.displayName || user?.email}</strong>
+              {user?.email ? ` · ${user.email}` : ""}
+            </p>
+          </div>
+          <button type="button" className="ghost-btn" onClick={() => void handleSignOut()}>
             Sign out
           </button>
-        </aside>
+        </header>
 
         <div className="org-main">
           {organizations.length > 0 ? (

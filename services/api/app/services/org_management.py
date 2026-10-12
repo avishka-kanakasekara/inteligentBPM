@@ -783,6 +783,25 @@ class PolicyService:
         )
         return record
 
+    def delete(
+        self,
+        policy_id: UUID,
+        *,
+        actor_user_id: UUID,
+        correlation_id: str | None,
+    ) -> PolicyRecord:
+        record = self.repo.delete(policy_id)
+        self.audit.record(
+            organization_id=self.organization_id,
+            actor_user_id=actor_user_id,
+            action="policy.deleted",
+            resource_type="policy",
+            resource_id=record.id,
+            correlation_id=correlation_id,
+            payload={"code": record.code, "title": record.title},
+        )
+        return record
+
 
 class CsvImportService:
     """CSV preview + commit with validation, duplicate detection, and error reporting."""

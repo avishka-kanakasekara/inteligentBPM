@@ -1,10 +1,11 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   createContext,
   useCallback,
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -30,13 +31,24 @@ type OrganizationContextValue = {
 const OrganizationContext = createContext<OrganizationContextValue | null>(null);
 
 export function OrganizationProvider({ children }: { children: ReactNode }) {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, user } = useAuth();
+  const queryClient = useQueryClient();
   const [activeId, setActiveId] = useState<string | null>(() =>
     sessionStore.getOrganizationId(),
   );
+  const previousUserId = useRef<string | null | undefined>(undefined);
+
+  useEffect(() => {
+    const userId = user?.id ?? null;
+    const previous = previousUserId.current;
+    previousUserId.current = userId;
+    if (previous === undefined || previous === userId) return;
+    queryClient.clear();
+    setActiveId(sessionStore.getOrganizationId());
+  }, [queryClient, user?.id]);
 
   const query = useQuery({
-    queryKey: ["organizations"],
+    queryKey: ["organizations", user?.id],
     queryFn: () => apiClient.listOrganizations(),
     enabled: isAuthenticated,
     retry: (failureCount, error) => {

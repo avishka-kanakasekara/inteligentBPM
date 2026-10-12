@@ -66,6 +66,7 @@ describe("permission-based visibility", () => {
     expect(await screen.findByRole("heading", { name: /dashboard/i })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /^audit$/i })).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: /^approvals$/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /menu/i })).toHaveAttribute("aria-expanded", "false");
   });
 });
 
@@ -106,6 +107,47 @@ describe("process and approval rendering", () => {
     expect(screen.getByText(/executing/i)).toBeInTheDocument();
     expect(screen.getByText(/risk: high/i)).toBeInTheDocument();
     expect(screen.getByText(/approval: pending/i)).toBeInTheDocument();
+  });
+});
+
+describe("new account dashboard", () => {
+  it("keeps KPI cards at zero until the new account creates a process", async () => {
+    const user = userEvent.setup();
+    const userId = "cccccccc-cccc-cccc-cccc-cccccccccccc";
+    sessionStore.setUser({
+      id: userId,
+      email: "new@example.com",
+      displayName: "New User",
+    });
+    sessionStore.setToken(`mock-access-token:${userId}`);
+    renderApp("/organizations");
+
+    expect(await screen.findByText(/no organizations yet/i)).toBeInTheDocument();
+    await user.type(screen.getByLabelText(/organization name/i), "New Co");
+    await user.click(screen.getByRole("button", { name: /create & enter/i }));
+
+    expect(await screen.findByRole("heading", { name: /dashboard/i })).toBeInTheDocument();
+    const values = [...document.querySelectorAll(".kpi-value")].map((node) => node.textContent);
+    expect(values).toEqual(["0", "0", "0", "0", "0"]);
+  });
+
+  it("keeps a signed-up account empty after signing out and back in", async () => {
+    const user = userEvent.setup();
+    renderApp("/signup");
+
+    await user.type(await screen.findByLabelText(/full name/i), "New User");
+    await user.type(screen.getByLabelText(/work email/i), "new.user@example.com");
+    await user.type(screen.getByLabelText(/^password$/i), "password123");
+    await user.type(screen.getByLabelText(/confirm password/i), "password123");
+    await user.click(screen.getByRole("button", { name: /create account/i }));
+
+    expect(await screen.findByText(/no organizations yet/i)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /sign out/i }));
+
+    await signInAs(user, "new.user@example.com");
+    expect(await screen.findByText(/no organizations yet/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /acme enterprise/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /demo organization/i })).not.toBeInTheDocument();
   });
 });
 

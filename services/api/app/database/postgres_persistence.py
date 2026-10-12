@@ -546,8 +546,25 @@ def bootstrap_organization(
         )
 
 
+def ensure_policy_detail_columns() -> None:
+    """Keep policy text available on databases created before description was stored."""
+    with sync_session_scope() as session:
+        session.execute(text("alter table public.policies add column if not exists description text"))
+        session.execute(
+            text("alter table public.policies add column if not exists owner_employee_id uuid")
+        )
+        session.execute(
+            text(
+                "alter table public.policies add column if not exists metadata jsonb "
+                "not null default '{}'::jsonb"
+            )
+        )
+
+
 def hydrate_store(store: MemoryStore) -> None:
     def load_organizations(session: Session) -> None:
+    ensure_policy_detail_columns()
+    with sync_session_scope() as session:
         for row in session.scalars(select(OrganizationModel)).all():
             store.organizations[row.id] = OrganizationRecord(
                 id=row.id,
@@ -605,6 +622,19 @@ def hydrate_store(store: MemoryStore) -> None:
                     RoleModel.id == EmployeeModel.role_id,
                     RoleModel.tenant_id == EmployeeModel.organization_id,
                 ),
+        for row in session.scalars(select(PolicyModel)).all():
+            store.policies[row.id] = PolicyRecord(
+                id=row.id,
+                organization_id=row.organization_id,
+                code=row.code,
+                title=row.title,
+                status=row.status,
+                created_at=row.created_at,
+                updated_at=row.updated_at,
+                category=row.category,
+                description=row.description,
+                owner_employee_id=row.owner_employee_id,
+                metadata=dict(row.metadata_json or {}),
             )
         ).all()
         for row, role_code, role_tenant_id in employee_rows:
@@ -812,6 +842,12 @@ def _hydrate_optional_catalogs(session: Session, store: MemoryStore) -> None:
                 expiration_timestamp=payload.get("expiration_timestamp"),
                 audit_reference=payload.get("audit_reference"),
                 risk_analysis_id=payload.get("risk_analysis_id"),
+                approval_id=row.approval_id,
+                dry_run=row.dry_run,
+                current_step_index=row.current_step_index,
+                pause_reason=row.pause_reason,
+                allowed_tools=list(row.allowed_tools or []),
+                metadata=dict(row.metadata_json or {}),
             )
     for row in session.scalars(select(AppProcessRunModel)).all():
         store.process_runs[row.id] = ProcessRunRecord(
@@ -1436,6 +1472,9 @@ def persist_policy(store: MemoryStore, record: PolicyRecord) -> None:
                 code=record.code,
                 title=record.title,
                 category=record.category,
+                description=record.description,
+                owner_employee_id=record.owner_employee_id,
+                metadata_json=record.metadata or {},
                 status=record.status,
                 row_version=1,
                 created_at=record.created_at,
@@ -1765,7 +1804,7 @@ def persist_process_run(store: MemoryStore, record: ProcessRunRecord) -> None:
                 current_step_index=record.current_step_index,
                 pause_reason=record.pause_reason,
                 allowed_tools=list(record.allowed_tools),
-                metadata_json={},
+                metadata_json=dict(getattr(record, "metadata", None) or {}),
                 row_version=1,
                 created_at=record.created_at,
                 updated_at=record.updated_at,
@@ -1822,6 +1861,58 @@ def enable_postgres_persistence(store: MemoryStore) -> None:
     )
     store.tool_invocations = _PersistedDict(store, persist_tool_invocation, store.tool_invocations)
     store.email_outbox = _PersistedDict(store, persist_email_outbox, store.email_outbox)
+
+
+def delete_policy_persistence(organization_id: UUID, policy_id: UUID) -> None:
+    """Remove a policy after releasing its current version pointer."""
+    params = {"organization_id": organization_id, "policy_id": policy_id}
+    statements = (
+        """
+        UPDATE public.policies
+        SET current_version_id = NULL
+        WHERE id = :policy_id
+          AND organization_id = :organization_id
+        """,
+        """
+        DELETE FROM public.policies
+        WHERE id = :policy_id
+          AND organization_id = :organization_id
+        """,
+    )
+    with sync_session_scope() as session:
+        for statement in statements:
+            session.execute(text(statement), params)
+
+
+def delete_process_persistence(organization_id: UUID, process_id: UUID) -> None:
+    """Remove a process and rows that block deleting the definition."""
+    params = {"organization_id": organization_id, "process_id": process_id}
+    statements = (
+        """
+        DELETE FROM public.app_execution_artifacts
+        WHERE organization_id = :organization_id
+          AND process_id = :process_id
+        """,
+        """
+        DELETE FROM public.process_runs
+        WHERE organization_id = :organization_id
+          AND process_definition_id = :process_id
+        """,
+        """
+        UPDATE public.process_definitions
+        SET current_version_id = NULL
+        WHERE id = :process_id
+          AND organization_id = :organization_id
+        """,
+        """
+        DELETE FROM public.process_definitions
+        WHERE id = :process_id
+          AND organization_id = :organization_id
+        """,
+    )
+    with sync_session_scope() as session:
+        for statement in statements:
+            session.execute(text(statement), params)
 
 
 def persist_mutation(store: MemoryStore, collection: str, record_id: UUID) -> None:

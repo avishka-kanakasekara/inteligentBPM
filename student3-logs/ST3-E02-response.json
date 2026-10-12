@@ -1,0 +1,170 @@
+{
+  "http_status": 200,
+  "body": {
+    "organization_id": "76ec608f-37a4-45fa-bb58-fb81c0710720",
+    "process_id": "a1b85355-ac3f-4734-a02f-f0b1e156b48d",
+    "process_version_id": "5b227645-ba27-47ab-94d6-dca136395450",
+    "allocation_id": null,
+    "decision": "BLOCKED",
+    "overall_status": "fail",
+    "risk_items": [
+      {
+        "id": "risk_spend_blocked",
+        "category": "financial",
+        "severity": "critical",
+        "likelihood": "likely",
+        "impact": "severe",
+        "description": "Spending amount 150,000.00 exceeds hard block threshold 100,000.00.",
+        "policy_reference": {
+          "policy_id": "a76ec608-f001-4000-8000-000000000001",
+          "policy_code": "FIN-001",
+          "title": "Spending threshold policy",
+          "rule_type": "spending_threshold",
+          "section": "\u00a73 hard limit"
+        },
+        "evidence_references": [
+          {
+            "type": "policy",
+            "id": "a76ec608-f001-4000-8000-000000000001",
+            "label": "PROC-001 \u2014 Procurement Approval Policy",
+            "excerpt": "Procurement Approval Policy",
+            "page_number": null
+          },
+          {
+            "type": "policy",
+            "id": "a76ec608-f001-4000-8000-000000000002",
+            "label": "FIN-001 \u2014 Spend Authority Policy",
+            "excerpt": "Spend Authority Policy",
+            "page_number": null
+          },
+          {
+            "type": "policy",
+            "id": "a76ec608-f001-4000-8000-000000000003",
+            "label": "SEC-200 \u2014 Vendor Security Review",
+            "excerpt": "Vendor Security Review",
+            "page_number": null
+          }
+        ],
+        "blocking": true,
+        "required_remediation": "Reduce spend or obtain audited executive override.",
+        "required_approver": "owner",
+        "review_or_expiration_date": "2026-10-14",
+        "rule_type": "spending_threshold",
+        "step_ids": [],
+        "deterministic": true
+      }
+    ],
+    "blocking_issues": [
+      {
+        "id": "risk_spend_blocked",
+        "category": "financial",
+        "severity": "critical",
+        "likelihood": "likely",
+        "impact": "severe",
+        "description": "Spending amount 150,000.00 exceeds hard block threshold 100,000.00.",
+        "policy_reference": {
+          "policy_id": "a76ec608-f001-4000-8000-000000000001",
+          "policy_code": "FIN-001",
+          "title": "Spending threshold policy",
+          "rule_type": "spending_threshold",
+          "section": "\u00a73 hard limit"
+        },
+        "evidence_references": [
+          {
+            "type": "policy",
+            "id": "a76ec608-f001-4000-8000-000000000001",
+            "label": "PROC-001 \u2014 Procurement Approval Policy",
+            "excerpt": "Procurement Approval Policy",
+            "page_number": null
+          },
+          {
+            "type": "policy",
+            "id": "a76ec608-f001-4000-8000-000000000002",
+            "label": "FIN-001 \u2014 Spend Authority Policy",
+            "excerpt": "Spend Authority Policy",
+            "page_number": null
+          },
+          {
+            "type": "policy",
+            "id": "a76ec608-f001-4000-8000-000000000003",
+            "label": "SEC-200 \u2014 Vendor Security Review",
+            "excerpt": "Vendor Security Review",
+            "page_number": null
+          }
+        ],
+        "blocking": true,
+        "required_remediation": "Reduce spend or obtain audited executive override.",
+        "required_approver": "owner",
+        "review_or_expiration_date": "2026-10-14",
+        "rule_type": "spending_threshold",
+        "step_ids": [],
+        "deterministic": true
+      }
+    ],
+    "required_approvals": [
+      {
+        "id": "appr_owner",
+        "role": "owner",
+        "reason": "Spending amount 150,000.00 exceeds hard block threshold 100,000.00.",
+        "risk_item_ids": [
+          "risk_spend_blocked"
+        ],
+        "authority_limit": null
+      }
+    ],
+    "required_approver_roles": [
+      "owner"
+    ],
+    "policy_evidence": [
+      {
+        "type": "policy",
+        "id": "a76ec608-f001-4000-8000-000000000001",
+        "label": "PROC-001 \u2014 Procurement Approval Policy",
+        "excerpt": "Procurement Approval Policy",
+        "page_number": null
+      },
+      {
+        "type": "policy",
+        "id": "a76ec608-f001-4000-8000-000000000002",
+        "label": "FIN-001 \u2014 Spend Authority Policy",
+        "excerpt": "Spend Authority Policy",
+        "page_number": null
+      },
+      {
+        "type": "policy",
+        "id": "a76ec608-f001-4000-8000-000000000003",
+        "label": "SEC-200 \u2014 Vendor Security Review",
+        "excerpt": "Vendor Security Review",
+        "page_number": null
+      }
+    ],
+    "ambiguous_findings": [
+      {
+        "topic": "Policy relationship to spending block",
+        "explanation": "The 'Vendor Security Review' policy (SEC-200) is listed as an evidence reference for the 'Spending amount exceeds hard block threshold' finding. However, the finding's description is purely financial and does not explicitly mention vendor security aspects. It is unclear how SEC-200 directly contributes to or is violated by exceeding a spending threshold.",
+        "related_policy_codes": [
+          "SEC-200",
+          "FIN-001",
+          "PROC-001"
+        ],
+        "suggested_questions": [
+          "Is there a specific clause in SEC-200 that links vendor security review requirements to spending thresholds?",
+          "Was SEC-200 included as a general reference for procurement, or is there a direct security implication for this specific spending threshold violation?"
+        ],
+        "cannot_approve": true
+      }
+    ],
+    "clarifying_questions": [],
+    "missing_evidence": [],
+    "plan_snapshot_hash": "5f6dab0afdff6c63c125253b96d60081e26514c28b6276f1056f47be2dba22b0",
+    "allocation_snapshot_hash": null,
+    "risk_snapshot_hash": "d0b6d31a03512ab7a3c3a27ec23a6bca28a5c165356e6613a8f1c23c973d2e0d",
+    "reasoning_summary": "Deterministic decision: BLOCKED due to policy violations. Gemini cannot approve or bypass blockers. The proposed purchase of $150,000 for office equipment directly violates the Spend Authority Policy (FIN-001) by exceeding a hard block threshold of $100,000. This is a critical blocking issue that requires either a reduction in spend or an audited executive override. The Procurement Approval Policy (PROC-001) is also implicated as spending authority is a prerequisite for procurement approval.",
+    "llm_used": true,
+    "gemini_approved": false,
+    "valid": true,
+    "invalidated_reason": null,
+    "created_at": "2026-10-07T10:12:55.700602Z",
+    "updated_at": "2026-10-07T10:12:55.700602Z"
+  }
+}

@@ -151,6 +151,29 @@ export function DiscoveryChatPage() {
   }, [chatHistoryQuery.data, selectedProcessId, chatHistoryQuery.isLoading]);
 
   // Create process mutation
+  const deleteProcessMutation = useMutation({
+    mutationFn: (processId: string) => apiClient.deleteProcess(processId),
+    onSuccess: (_data, processId) => {
+      const removed = processes.find((item) => item.id === processId);
+      void queryClient.invalidateQueries({ queryKey: ["processes"] });
+      void queryClient.invalidateQueries({ queryKey: ["process-plans"] });
+      void queryClient.invalidateQueries({ queryKey: ["active-runs"] });
+      void queryClient.invalidateQueries({ queryKey: ["history"] });
+      if (selectedProcessId === processId) {
+        setSelectedProcessId("");
+        setDraftedPlan(null);
+        setPlanConfirmed(false);
+        setPendingDocs([]);
+        setMessages([]);
+      }
+      setActionNotice(removed ? `Deleted process: "${removed.name}"` : "Process deleted");
+    },
+    onError: (error: unknown) => {
+      const message = error instanceof ApiError ? error.message : "Could not delete the process";
+      setActionNotice(message);
+    },
+  });
+
   const createProcessMutation = useMutation({
     mutationFn: (data: { name: string; description?: string }) =>
       apiClient.createProcess(data),
@@ -313,41 +336,64 @@ export function DiscoveryChatPage() {
             {processes.length === 0 ? (
               <span className="muted">No processes yet. Create one to begin.</span>
             ) : (
-              <select
-                id="process-selector"
-                value={selectedProcessId}
-                onChange={(e) => {
-                  setSelectedProcessId(e.target.value);
-                  setDraftedPlan(null);
-                  setPlanConfirmed(false);
-                  setPendingDocs([]);
-                  setUploadError(null);
-                }}
-                style={{ flex: 1, maxWidth: "400px" }}
-              >
-                {processes.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name} ({p.status})
-                  </option>
-                ))}
-              </select>
+              <>
+                <select
+                  id="process-selector"
+                  value={selectedProcessId}
+                  onChange={(e) => {
+                    setSelectedProcessId(e.target.value);
+                    setDraftedPlan(null);
+                    setPlanConfirmed(false);
+                    setPendingDocs([]);
+                    setUploadError(null);
+                  }}
+                  style={{ flex: 1, maxWidth: "400px" }}
+                >
+                  {processes.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name} ({p.status})
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className="btn btn-danger"
+                  disabled={deleteProcessMutation.isPending || !selectedProcessId}
+                  onClick={() => {
+                    const current = processes.find((item) => item.id === selectedProcessId);
+                    const name = current?.name ?? "this process";
+                    if (
+                      !window.confirm(
+                        `Delete "${name}"? The discovery chat, plan, and any runs for this process will be removed.`,
+                      )
+                    ) {
+                      return;
+                    }
+                    deleteProcessMutation.mutate(selectedProcessId);
+                  }}
+                >
+                  {deleteProcessMutation.isPending ? "Deleting…" : "Delete"}
+                </button>
+              </>
             )}
           </div>
 
           {selectedProcessId ? (
-            <button
-              type="button"
-              className="btn-secondary"
-              onClick={() =>
-                draftPlanMutation.mutate({
-                  procId: selectedProcessId,
-                  documentIds: Array.from(new Set([...sessionDocumentIds, ...pendingDocs.map((d) => d.id)])),
-                })
-              }
-              disabled={draftPlanMutation.isPending}
-            >
-              {draftPlanMutation.isPending ? "Drafting plan…" : "Draft plan"}
-            </button>
+            <>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() =>
+                  draftPlanMutation.mutate({
+                    procId: selectedProcessId,
+                    documentIds: Array.from(new Set([...sessionDocumentIds, ...pendingDocs.map((d) => d.id)])),
+                  })
+                }
+                disabled={draftPlanMutation.isPending}
+              >
+                {draftPlanMutation.isPending ? "Drafting plan…" : "Draft plan"}
+              </button>
+            </>
           ) : null}
         </div>
 

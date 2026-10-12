@@ -3,7 +3,7 @@ import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { DocumentSearchHit } from "@bpm/frontend-types";
+import type { DocumentSearchHit, Policy } from "@bpm/frontend-types";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { LoadingState } from "../../components/ui/LoadingState";
 import { RetryState } from "../../components/ui/RetryState";
@@ -21,6 +21,18 @@ const policySchema = z.object({
 
 type PolicyForm = z.infer<typeof policySchema>;
 
+function policyText(policy: Policy): string {
+  const description = policy.description?.trim();
+  if (description) return description;
+  return "";
+}
+
+function metadataEntries(policy: Policy): Array<[string, string]> {
+  return Object.entries(policy.metadata ?? {})
+    .filter(([, value]) => value !== null && value !== undefined && value !== "")
+    .map(([key, value]) => [key, typeof value === "string" ? value : JSON.stringify(value)]);
+}
+
 export function PoliciesDocumentsPage() {
   const { activeOrganization } = useOrganization();
   const canManagePolicies =
@@ -34,6 +46,11 @@ export function PoliciesDocumentsPage() {
   const [searchHits, setSearchHits] = useState<DocumentSearchHit[]>([]);
   const [agentContext, setAgentContext] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [reprocessError, setReprocessError] = useState<string | null>(null);
+  const [selectedPolicyId, setSelectedPolicyId] = useState<string | null>(null);
+  const [detailDraft, setDetailDraft] = useState("");
+  const [detailError, setDetailError] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const policiesQuery = useQuery({
     queryKey: ["policies", activeOrganization?.id],
@@ -62,6 +79,43 @@ export function PoliciesDocumentsPage() {
       form.reset();
       void queryClient.invalidateQueries({ queryKey: ["policies"] });
     },
+  });
+
+  const saveDetailMutation = useMutation({
+    mutationFn: (policy: Policy) =>
+      apiClient.updatePolicy(policy.id, { description: detailDraft.trim() }),
+    onSuccess: () => {
+      setDetailError(null);
+      void queryClient.invalidateQueries({ queryKey: ["policies"] });
+    },
+    onError: (error: Error) => setDetailError(error.message),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (policy: Policy) => apiClient.deletePolicy(policy.id),
+    onSuccess: (_result, policy) => {
+      setDeleteError(null);
+      if (selectedPolicyId === policy.id) setSelectedPolicyId(null);
+      void queryClient.invalidateQueries({ queryKey: ["policies"] });
+    },
+    onError: (error: Error) => setDeleteError(error.message),
+  });
+
+  function requestDelete(policy: Policy) {
+    const confirmed = window.confirm(
+      `Delete ${policy.code} — ${policy.title}? This removes the policy.`,
+    );
+    if (!confirmed) return;
+    deleteMutation.mutate(policy);
+  }
+
+  const reprocessMutation = useMutation({
+    mutationFn: (id: string) => apiClient.reprocessDocument(id),
+    onSuccess: () => {
+      setReprocessError(null);
+      void queryClient.invalidateQueries({ queryKey: ["documents"] });
+    },
+    onError: (error: Error) => setReprocessError(error.message),
   });
 
   const searchMutation = useMutation({
@@ -131,31 +185,147 @@ export function PoliciesDocumentsPage() {
           <EmptyState title="No policies" description="Create policy metadata to begin." />
         ) : null}
 
+        {deleteError ? (
+          <p className="field-error" role="alert">
+            {deleteError}
+          </p>
+        ) : null}
+
         {policiesQuery.data && policiesQuery.data.items.length > 0 ? (
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th scope="col">Code</th>
-                <th scope="col">Title</th>
-                <th scope="col">Category</th>
-                <th scope="col">Status</th>
-                <th scope="col">Metadata</th>
-              </tr>
-            </thead>
-            <tbody>
-              {policiesQuery.data.items.map((p) => (
-                <tr key={p.id}>
-                  <td>{p.code}</td>
-                  <td>{p.title}</td>
-                  <td>{p.category ?? "—"}</td>
-                  <td>{p.status}</td>
-                  <td>
-                    <code>{JSON.stringify(p.metadata ?? {})}</code>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <>
+            <div className="table-wrap">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th scope="col">Code</th>
+                    <th scope="col">Title</th>
+                    <th scope="col">Category</th>
+                    <th scope="col">Status</th>
+                    <th scope="col">Details</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {policiesQuery.data.items.map((policy) => {
+                    const open = selectedPolicyId === policy.id;
+                    const text = policyText(policy);
+                    return (
+                      <tr key={policy.id} className={open ? "is-selected" : undefined}>
+                        <td>{policy.code}</td>
+                        <td>{policy.title}</td>
+                        <td>{policy.category ?? "—"}</td>
+                        <td>{policy.status}</td>
+                        <td>
+                          <div className="policy-row-actions">
+                            <button
+                              type="button"
+                              className="btn-secondary"
+                              aria-expanded={open}
+                              onClick={() => {
+                                if (open) {
+                                  setSelectedPolicyId(null);
+                                  return;
+                                }
+                                setSelectedPolicyId(policy.id);
+                                setDetailDraft(text);
+                                setDetailError(null);
+                              }}
+                            >
+                              {open ? "Hide" : "View"}
+                            </button>
+                            {canManagePolicies ? (
+                              <button
+                                type="button"
+                                className="btn-danger"
+                                disabled={deleteMutation.isPending}
+                                onClick={() => requestDelete(policy)}
+                              >
+                                Delete
+                              </button>
+                            ) : null}
+                          </div>
+                          {text ? <span className="policy-preview">{text}</span> : null}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            {policiesQuery.data.items
+              .filter((policy) => policy.id === selectedPolicyId)
+              .map((policy) => {
+                const text = policyText(policy);
+                const meta = metadataEntries(policy);
+                return (
+                  <article key={policy.id} className="panel policy-detail" aria-labelledby="policy-detail-title">
+                    <div className="policy-detail-head">
+                      <div>
+                        <p className="eyebrow">{policy.code}</p>
+                        <h2 id="policy-detail-title">{policy.title}</h2>
+                      </div>
+                      <div className="policy-row-actions">
+                        {canManagePolicies ? (
+                          <button
+                            type="button"
+                            className="btn-danger"
+                            disabled={deleteMutation.isPending}
+                            onClick={() => requestDelete(policy)}
+                          >
+                            {deleteMutation.isPending ? "Deleting…" : "Delete"}
+                          </button>
+                        ) : null}
+                        <button type="button" className="ghost-btn" onClick={() => setSelectedPolicyId(null)}>
+                          Close
+                        </button>
+                      </div>
+                    </div>
+                    <p className="badge-row">
+                      <span className="status-pill">{policy.status}</span>
+                      <span className="muted">{policy.category ?? "Uncategorized"}</span>
+                    </p>
+                    {canManagePolicies ? (
+                      <form
+                        className="policy-edit"
+                        onSubmit={(event) => {
+                          event.preventDefault();
+                          saveDetailMutation.mutate(policy);
+                        }}
+                      >
+                        <label htmlFor="policy-detail-text">Policy detail</label>
+                        <textarea
+                          id="policy-detail-text"
+                          rows={5}
+                          value={detailDraft}
+                          onChange={(event) => setDetailDraft(event.target.value)}
+                        />
+                        {detailError ? (
+                          <p className="field-error" role="alert">
+                            {detailError}
+                          </p>
+                        ) : null}
+                        <button type="submit" disabled={saveDetailMutation.isPending}>
+                          {saveDetailMutation.isPending ? "Saving…" : "Save detail"}
+                        </button>
+                      </form>
+                    ) : (
+                      <p className="policy-body">
+                        {text || "This policy has no written detail yet."}
+                      </p>
+                    )}
+                    {meta.length > 0 ? (
+                      <dl className="policy-meta">
+                        {meta.map(([key, value]) => (
+                          <div key={key}>
+                            <dt>{key}</dt>
+                            <dd>{value}</dd>
+                          </div>
+                        ))}
+                      </dl>
+                    ) : null}
+                  </article>
+                );
+              })}
+          </>
         ) : null}
 
         {canManagePolicies ? (
@@ -209,12 +379,18 @@ export function PoliciesDocumentsPage() {
               {uploadError}
             </p>
           ) : null}
+          {reprocessError ? (
+            <p className="field-error" role="alert">
+              {reprocessError}
+            </p>
+          ) : null}
 
           {documentsQuery.isLoading ? <LoadingState label="Loading documents…" /> : null}
           {documentsQuery.data?.items.length === 0 ? (
             <EmptyState title="No documents" description="Upload a file to begin ingestion." />
           ) : null}
           {documentsQuery.data && documentsQuery.data.items.length > 0 ? (
+            <div className="table-wrap">
             <table className="data-table">
               <thead>
                 <tr>
@@ -223,6 +399,7 @@ export function PoliciesDocumentsPage() {
                   <th scope="col">Status</th>
                   <th scope="col">Chunks</th>
                   <th scope="col">Flags</th>
+                  {canUpload ? <th scope="col">Actions</th> : null}
                 </tr>
               </thead>
               <tbody>
@@ -245,10 +422,23 @@ export function PoliciesDocumentsPage() {
                     </td>
                     <td>{d.chunk_count ?? 0}</td>
                     <td>{(d.suspicious_flags ?? []).join(", ") || "—"}</td>
+                    {canUpload ? (
+                      <td>
+                        <button
+                          type="button"
+                          className="btn-secondary"
+                          disabled={reprocessMutation.isPending}
+                          onClick={() => reprocessMutation.mutate(d.id)}
+                        >
+                          Reprocess
+                        </button>
+                      </td>
+                    ) : null}
                   </tr>
                 ))}
               </tbody>
             </table>
+            </div>
           ) : null}
 
           <div className="toolbar">
