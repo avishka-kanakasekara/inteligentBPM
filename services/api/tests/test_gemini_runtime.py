@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import sys
+from unittest.mock import MagicMock
 from uuid import uuid4
 
 import pytest
 from pydantic import BaseModel, Field
 
-from app.config import reset_settings_cache
+from app.config import get_settings, reset_settings_cache
 from app.llm.client import FakeGeminiClient, VertexGeminiClient, create_gemini_client
 from app.llm.failures import LLMError, LLMFailureClassifier
 from app.llm.model_registry import ModelRegistry
@@ -329,10 +331,65 @@ def test_tool_calling_loop_returns_validated_final_response() -> None:
 def test_vertex_client_requires_project(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "")
     monkeypatch.setenv("GEMINI_CLIENT_MODE", "vertex")
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     reset_settings_cache()
     client = VertexGeminiClient()
     with pytest.raises(LLMError):
         client._get_client()
+
+
+def test_gemini_configured_with_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "")
+    monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "false")
+    monkeypatch.setenv("GOOGLE_API_KEY", "AQ.test-key")
+    monkeypatch.setenv("GEMINI_MODEL_ID", "gemini-2.0-flash")
+    reset_settings_cache()
+    settings = get_settings()
+    assert settings.uses_gemini_api_key() is True
+    assert settings.gemini_configured() is True
+
+
+def test_developer_api_client_uses_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "")
+    monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "false")
+    monkeypatch.setenv("GOOGLE_API_KEY", "AQ.test-key")
+    monkeypatch.setenv("GEMINI_CLIENT_MODE", "vertex")
+    monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
+    reset_settings_cache()
+
+    mock_client_cls = MagicMock(return_value=object())
+    mock_types = MagicMock()
+    mock_types.HttpOptions.return_value = object()
+    mock_genai = MagicMock()
+    mock_genai.Client = mock_client_cls
+
+    monkeypatch.setitem(sys.modules, "google", MagicMock(genai=mock_genai))
+    monkeypatch.setitem(sys.modules, "google.genai", mock_genai)
+    monkeypatch.setitem(sys.modules, "google.genai.types", mock_types)
+
+    client = VertexGeminiClient()
+    client._get_client()
+    mock_client_cls.assert_called_once()
+    kwargs = mock_client_cls.call_args.kwargs
+    assert kwargs["api_key"] == "AQ.test-key"
+    assert kwargs["vertexai"] is False
+
+
+def test_sanitize_schema_strips_additional_properties() -> None:
+    from app.llm.client import _sanitize_schema_for_developer_api
+
+    cleaned = _sanitize_schema_for_developer_api(
+        {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "nested": {"type": "object", "additionalProperties": True},
+            },
+        }
+    )
+    assert "additionalProperties" not in cleaned
+    assert "additionalProperties" not in cleaned["properties"]["nested"]
 
 
 def test_agent_execution_context_labels() -> None:

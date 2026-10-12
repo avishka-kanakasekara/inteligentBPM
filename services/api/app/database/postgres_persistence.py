@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert
 
 from app.contracts.common import utcnow
@@ -376,6 +376,7 @@ def hydrate_store(store: MemoryStore) -> None:
                 current_step_index=row.current_step_index,
                 pause_reason=row.pause_reason,
                 allowed_tools=list(row.allowed_tools or []),
+                metadata=dict(row.metadata_json or {}),
             )
         _ensure_execution_artifacts_table(session)
         for row in session.scalars(select(ExecutionArtifactModel)).all():
@@ -660,6 +661,11 @@ def _employee_from_row(row: EmployeeModel) -> EmployeeRecord:
         weekly_capacity_hours=float(
             40 if row.weekly_capacity_hours is None else row.weekly_capacity_hours
         ),
+        baseline_workload_percent=float(
+            row.current_workload_percent
+            if getattr(row, "baseline_workload_percent", None) is None
+            else row.baseline_workload_percent
+        ),
         current_workload_percent=float(
             row.current_workload_percent if row.current_workload_percent is not None else 0
         ),
@@ -716,6 +722,7 @@ def persist_employee(store: MemoryStore, record: EmployeeRecord) -> None:
                 skill_level=record.skill_level,
                 availability_percent=record.availability_percent,
                 weekly_capacity_hours=record.weekly_capacity_hours,
+                baseline_workload_percent=record.baseline_workload_percent,
                 current_workload_percent=record.current_workload_percent,
                 cost_per_hour=record.cost_per_hour,
                 monthly_cost=record.monthly_cost,
@@ -1169,7 +1176,7 @@ def persist_process_run(store: MemoryStore, record: ProcessRunRecord) -> None:
                 current_step_index=record.current_step_index,
                 pause_reason=record.pause_reason,
                 allowed_tools=list(record.allowed_tools),
-                metadata_json={},
+                metadata_json=dict(getattr(record, "metadata", None) or {}),
                 row_version=1,
                 created_at=record.created_at,
                 updated_at=record.updated_at,
@@ -1226,6 +1233,37 @@ def enable_postgres_persistence(store: MemoryStore) -> None:
     )
     store.tool_invocations = _PersistedDict(store, persist_tool_invocation, store.tool_invocations)
     store.email_outbox = _PersistedDict(store, persist_email_outbox, store.email_outbox)
+
+
+def delete_process_persistence(organization_id: UUID, process_id: UUID) -> None:
+    """Remove a process and rows that block deleting the definition."""
+    params = {"organization_id": organization_id, "process_id": process_id}
+    statements = (
+        """
+        DELETE FROM public.app_execution_artifacts
+        WHERE organization_id = :organization_id
+          AND process_id = :process_id
+        """,
+        """
+        DELETE FROM public.process_runs
+        WHERE organization_id = :organization_id
+          AND process_definition_id = :process_id
+        """,
+        """
+        UPDATE public.process_definitions
+        SET current_version_id = NULL
+        WHERE id = :process_id
+          AND organization_id = :organization_id
+        """,
+        """
+        DELETE FROM public.process_definitions
+        WHERE id = :process_id
+          AND organization_id = :organization_id
+        """,
+    )
+    with sync_session_scope() as session:
+        for statement in statements:
+            session.execute(text(statement), params)
 
 
 def persist_mutation(store: MemoryStore, collection: str, record_id: UUID) -> None:

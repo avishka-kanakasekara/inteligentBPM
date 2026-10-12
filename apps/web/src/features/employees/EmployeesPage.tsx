@@ -46,7 +46,7 @@ const employeeSchema = z
     skill_level: z.enum(["beginner", "intermediate", "expert"]),
     availability_percent: optionalNumber(z.number().min(0).max(100, "Use 0–100")),
     weekly_capacity_hours: optionalNumber(z.number().min(0).max(168, "Maximum is 168 hours")),
-    current_workload_percent: optionalNumber(z.number().min(0).max(100, "Use 0–100")),
+    baseline_workload_percent: optionalNumber(z.number().min(0).max(100, "Use 0–100")),
     cost_per_hour: optionalNumber(z.number().min(0, "Cost cannot be negative")),
     monthly_cost: optionalNumber(z.number().min(0, "Cost cannot be negative")),
     max_allocation_percent: optionalNumber(z.number().min(0).max(100, "Use 0–100")),
@@ -61,13 +61,13 @@ const employeeSchema = z
     performance_score: optionalNumber(z.number().min(0).max(100, "Use 0–100")),
   })
   .superRefine((values, ctx) => {
-    const workload = values.current_workload_percent ?? 0;
+    const workload = values.baseline_workload_percent ?? 0;
     const maximum = values.max_allocation_percent ?? 100;
     if (workload > maximum) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        path: ["current_workload_percent"],
-        message: "Workload cannot exceed the maximum allocation",
+        path: ["baseline_workload_percent"],
+        message: "Baseline workload cannot exceed the maximum allocation",
       });
     }
   });
@@ -97,7 +97,7 @@ const EMPTY_FORM: EmployeeForm = {
   skill_level: "intermediate",
   availability_percent: 100,
   weekly_capacity_hours: 40,
-  current_workload_percent: 0,
+  baseline_workload_percent: 0,
   cost_per_hour: undefined,
   monthly_cost: undefined,
   max_allocation_percent: 100,
@@ -152,7 +152,7 @@ function toPayload(values: EmployeeForm): Record<string, unknown> {
     skill_level: values.skill_level,
     availability_percent: values.availability_percent ?? 100,
     weekly_capacity_hours: values.weekly_capacity_hours ?? 40,
-    current_workload_percent: values.current_workload_percent ?? 0,
+    baseline_workload_percent: values.baseline_workload_percent ?? 0,
     cost_per_hour: values.cost_per_hour ?? null,
     monthly_cost: values.monthly_cost ?? null,
     max_allocation_percent: values.max_allocation_percent ?? 100,
@@ -194,7 +194,7 @@ function formFromEmployee(employee: Employee): EmployeeForm {
     skill_level: employee.skill_level ?? "intermediate",
     availability_percent: employee.availability_percent ?? 100,
     weekly_capacity_hours: employee.weekly_capacity_hours ?? 40,
-    current_workload_percent: employee.current_workload_percent ?? 0,
+    baseline_workload_percent: employee.baseline_workload_percent ?? 0,
     cost_per_hour: employee.cost_per_hour ?? undefined,
     monthly_cost: employee.monthly_cost ?? undefined,
     max_allocation_percent: employee.max_allocation_percent ?? 100,
@@ -227,6 +227,7 @@ export function EmployeesPage() {
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("active");
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [calculatedWorkload, setCalculatedWorkload] = useState<number | null>(null);
   const queryClient = useQueryClient();
 
   const queryString = useMemo(() => {
@@ -289,6 +290,7 @@ export function EmployeesPage() {
     },
     onSuccess: () => {
       setEditingId(null);
+      setCalculatedWorkload(null);
       form.reset(EMPTY_FORM);
       void queryClient.invalidateQueries({ queryKey: ["employees"] });
     },
@@ -299,8 +301,79 @@ export function EmployeesPage() {
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["employees"] }),
   });
 
+  const [orgNotice, setOrgNotice] = useState<string | null>(null);
+  const [departmentDraft, setDepartmentDraft] = useState({ name: "", code: "" });
+  const [costCenterDraft, setCostCenterDraft] = useState({
+    code: "",
+    name: "",
+    department_id: "",
+  });
+  const [budgetDraft, setBudgetDraft] = useState({
+    name: "",
+    fiscal_year: String(new Date().getFullYear()),
+    amount_total: "",
+    currency_code: "USD",
+    department_id: "",
+    cost_center_id: "",
+  });
+
+  const departmentMutation = useMutation({
+    mutationFn: () =>
+      apiClient.createDepartment({
+        name: departmentDraft.name.trim(),
+        code: departmentDraft.code.trim() || null,
+      }),
+    onSuccess: () => {
+      setDepartmentDraft({ name: "", code: "" });
+      setOrgNotice("Department created");
+      void queryClient.invalidateQueries({ queryKey: ["departments"] });
+    },
+    onError: (error: Error) => setOrgNotice(error.message),
+  });
+
+  const costCenterMutation = useMutation({
+    mutationFn: () =>
+      apiClient.createCostCenter({
+        code: costCenterDraft.code.trim(),
+        name: costCenterDraft.name.trim(),
+        department_id: costCenterDraft.department_id || null,
+      }),
+    onSuccess: () => {
+      setCostCenterDraft({ code: "", name: "", department_id: "" });
+      setOrgNotice("Cost center created");
+      void queryClient.invalidateQueries({ queryKey: ["cost-centers"] });
+    },
+    onError: (error: Error) => setOrgNotice(error.message),
+  });
+
+  const budgetMutation = useMutation({
+    mutationFn: () =>
+      apiClient.createBudget({
+        name: budgetDraft.name.trim(),
+        fiscal_year: Number(budgetDraft.fiscal_year),
+        amount_total: Number(budgetDraft.amount_total),
+        currency_code: budgetDraft.currency_code.trim() || "USD",
+        department_id: budgetDraft.department_id || null,
+        cost_center_id: budgetDraft.cost_center_id || null,
+      }),
+    onSuccess: () => {
+      setBudgetDraft({
+        name: "",
+        fiscal_year: String(new Date().getFullYear()),
+        amount_total: "",
+        currency_code: "USD",
+        department_id: "",
+        cost_center_id: "",
+      });
+      setOrgNotice("Budget created");
+      void queryClient.invalidateQueries({ queryKey: ["budgets"] });
+    },
+    onError: (error: Error) => setOrgNotice(error.message),
+  });
+
   function beginEdit(employee: Employee) {
     setEditingId(employee.id);
+    setCalculatedWorkload(employee.current_workload_percent ?? 0);
     form.reset(formFromEmployee(employee));
     document.getElementById("add-employee")?.scrollIntoView({ behavior: "smooth" });
   }
@@ -369,6 +442,7 @@ export function EmployeesPage() {
           <EmptyState title="No employees" description="Import a CSV or add an employee." />
         ) : null}
         {employeesQuery.data && employeesQuery.data.items.length > 0 ? (
+          <div className="table-wrap">
           <table className="data-table">
             <thead>
               <tr>
@@ -424,6 +498,7 @@ export function EmployeesPage() {
               ))}
             </tbody>
           </table>
+          </div>
         ) : null}
 
         {canManage ? (
@@ -591,9 +666,24 @@ export function EmployeesPage() {
                       <FieldError message={errors.weekly_capacity_hours?.message} />
                     </label>
                     <label>
-                      Current workload %
-                      <input type="number" min={0} max={100} step="1" {...form.register("current_workload_percent")} />
-                      <FieldError message={errors.current_workload_percent?.message} />
+                      Baseline workload %
+                      <input
+                        type="number"
+                        min={0}
+                        max={100}
+                        step="1"
+                        {...form.register("baseline_workload_percent")}
+                      />
+                      <FieldError message={errors.baseline_workload_percent?.message} />
+                    </label>
+                    <label>
+                      Calculated workload %
+                      <input
+                        type="text"
+                        readOnly
+                        value={`${calculatedWorkload ?? form.watch("baseline_workload_percent") ?? 0}%`}
+                        aria-label="Calculated workload percent"
+                      />
                     </label>
                     <label>
                       Maximum allocation %
@@ -709,9 +799,47 @@ export function EmployeesPage() {
           </>
         ) : null}
 
+        {orgNotice ? (
+          <p className="inline-notice" role="status">
+            {orgNotice}
+          </p>
+        ) : null}
         <div className="split-panels" style={{ marginTop: "1.5rem" }}>
           <article>
             <h2>Departments</h2>
+            {canManage ? (
+              <form
+                className="mgmt-form"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  if (!departmentDraft.name.trim()) return;
+                  departmentMutation.mutate();
+                }}
+              >
+                <label>
+                  Name
+                  <input
+                    value={departmentDraft.name}
+                    onChange={(event) =>
+                      setDepartmentDraft((draft) => ({ ...draft, name: event.target.value }))
+                    }
+                    required
+                  />
+                </label>
+                <label>
+                  Code
+                  <input
+                    value={departmentDraft.code}
+                    onChange={(event) =>
+                      setDepartmentDraft((draft) => ({ ...draft, code: event.target.value }))
+                    }
+                  />
+                </label>
+                <button type="submit" disabled={departmentMutation.isPending}>
+                  {departmentMutation.isPending ? "Adding…" : "Add department"}
+                </button>
+              </form>
+            ) : null}
             <ul className="simple-list">
               {(departmentsQuery.data?.items ?? []).map((d) => (
                 <li key={d.id}>
@@ -722,6 +850,59 @@ export function EmployeesPage() {
           </article>
           <article>
             <h2>Cost centers</h2>
+            {canManage ? (
+              <form
+                className="mgmt-form"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  if (!costCenterDraft.code.trim() || !costCenterDraft.name.trim()) return;
+                  costCenterMutation.mutate();
+                }}
+              >
+                <label>
+                  Code
+                  <input
+                    value={costCenterDraft.code}
+                    onChange={(event) =>
+                      setCostCenterDraft((draft) => ({ ...draft, code: event.target.value }))
+                    }
+                    required
+                  />
+                </label>
+                <label>
+                  Name
+                  <input
+                    value={costCenterDraft.name}
+                    onChange={(event) =>
+                      setCostCenterDraft((draft) => ({ ...draft, name: event.target.value }))
+                    }
+                    required
+                  />
+                </label>
+                <label>
+                  Department
+                  <select
+                    value={costCenterDraft.department_id}
+                    onChange={(event) =>
+                      setCostCenterDraft((draft) => ({
+                        ...draft,
+                        department_id: event.target.value,
+                      }))
+                    }
+                  >
+                    <option value="">None</option>
+                    {(departmentsQuery.data?.items ?? []).map((department) => (
+                      <option key={department.id} value={department.id}>
+                        {department.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button type="submit" disabled={costCenterMutation.isPending}>
+                  {costCenterMutation.isPending ? "Adding…" : "Add cost center"}
+                </button>
+              </form>
+            ) : null}
             <ul className="simple-list">
               {(costCentersQuery.data?.items ?? []).map((c) => (
                 <li key={c.id}>
@@ -732,6 +913,63 @@ export function EmployeesPage() {
           </article>
           <article>
             <h2>Budgets</h2>
+            {canManage ? (
+              <form
+                className="mgmt-form"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  if (!budgetDraft.name.trim() || !budgetDraft.amount_total) return;
+                  budgetMutation.mutate();
+                }}
+              >
+                <label>
+                  Name
+                  <input
+                    value={budgetDraft.name}
+                    onChange={(event) =>
+                      setBudgetDraft((draft) => ({ ...draft, name: event.target.value }))
+                    }
+                    required
+                  />
+                </label>
+                <label>
+                  Fiscal year
+                  <input
+                    type="number"
+                    value={budgetDraft.fiscal_year}
+                    onChange={(event) =>
+                      setBudgetDraft((draft) => ({ ...draft, fiscal_year: event.target.value }))
+                    }
+                    required
+                  />
+                </label>
+                <label>
+                  Amount
+                  <input
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    value={budgetDraft.amount_total}
+                    onChange={(event) =>
+                      setBudgetDraft((draft) => ({ ...draft, amount_total: event.target.value }))
+                    }
+                    required
+                  />
+                </label>
+                <label>
+                  Currency
+                  <input
+                    value={budgetDraft.currency_code}
+                    onChange={(event) =>
+                      setBudgetDraft((draft) => ({ ...draft, currency_code: event.target.value }))
+                    }
+                  />
+                </label>
+                <button type="submit" disabled={budgetMutation.isPending}>
+                  {budgetMutation.isPending ? "Adding…" : "Add budget"}
+                </button>
+              </form>
+            ) : null}
             <ul className="simple-list">
               {(budgetsQuery.data?.items ?? []).map((b) => (
                 <li key={b.id}>

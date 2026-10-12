@@ -2,7 +2,6 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { LoadingState } from "../../components/ui/LoadingState";
-import { RetryState } from "../../components/ui/RetryState";
 import { RequireFeature } from "../../components/RouteGuards";
 import { ApiError, apiClient } from "../../lib/apiClient";
 import { useOrganization } from "../../providers/OrganizationProvider";
@@ -28,12 +27,6 @@ type ChatMessage = {
     systems?: string[];
   };
 };
-
-function discoveryErrorMessage(err: unknown, fallback: string): string {
-  if (err instanceof ApiError) return err.message;
-  if (err instanceof Error && err.message) return err.message;
-  return fallback;
-}
 
 function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -84,13 +77,7 @@ export function DiscoveryChatPage() {
   const [draftedPlan, setDraftedPlan] = useState<DraftedPlan | null>(null);
   const [planConfirmed, setPlanConfirmed] = useState(false);
   const [actionNotice, setActionNotice] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
-  const [createError, setCreateError] = useState<string | null>(null);
-  const [nameError, setNameError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const chatLogRef = useRef<HTMLDivElement>(null);
-  const messageInputRef = useRef<HTMLInputElement>(null);
-  const processNameInputRef = useRef<HTMLInputElement>(null);
 
   // Load process summaries
   const processesQuery = useQuery({
@@ -99,7 +86,7 @@ export function DiscoveryChatPage() {
     enabled: Boolean(activeOrganization?.id),
   });
 
-  const processes = useMemo(() => processesQuery.data ?? [], [processesQuery.data]);
+  const processes = processesQuery.data ?? [];
 
   const documentsQuery = useQuery({
     queryKey: ["documents", activeOrganization?.id],
@@ -142,20 +129,12 @@ export function DiscoveryChatPage() {
   });
 
   useEffect(() => {
-    if (chatHistoryQuery.data?.messages?.length) {
-      const history = chatHistoryQuery.data.messages as Array<{
-        id?: string;
-        role: "user" | "assistant";
-        content: string;
-        document_ids?: unknown;
-        clarifying_questions?: string[];
-        intent?: ChatMessage["intent"];
-      }>;
-      const mapped: ChatMessage[] = history.map((m) => ({
+    if (chatHistoryQuery.data?.messages) {
+      const mapped: ChatMessage[] = chatHistoryQuery.data.messages.map((m: any) => ({
         id: m.id,
         role: m.role,
         content: m.content,
-        document_ids: Array.isArray(m.document_ids) ? m.document_ids.filter((id): id is string => typeof id === "string") : [],
+        document_ids: Array.isArray(m.document_ids) ? m.document_ids : [],
         clarifying_questions: m.clarifying_questions,
         intent: m.intent,
       }));
@@ -165,13 +144,36 @@ export function DiscoveryChatPage() {
         {
           role: "assistant",
           content:
-            "I am Agent 1 (Process Discovery). Describe the business process you want to automate. I will ask what is missing and draft an execution plan. Vertex Gemini is used only when a Google Cloud project and model are configured.",
+            "I am Agent 1 (Process Discovery powered by Gemini). Describe the business process you want to automate. I will interview you to uncover requirements, detect missing dependencies, and generate a complete execution plan.",
         },
       ]);
     }
   }, [chatHistoryQuery.data, selectedProcessId, chatHistoryQuery.isLoading]);
 
   // Create process mutation
+  const deleteProcessMutation = useMutation({
+    mutationFn: (processId: string) => apiClient.deleteProcess(processId),
+    onSuccess: (_data, processId) => {
+      const removed = processes.find((item) => item.id === processId);
+      void queryClient.invalidateQueries({ queryKey: ["processes"] });
+      void queryClient.invalidateQueries({ queryKey: ["process-plans"] });
+      void queryClient.invalidateQueries({ queryKey: ["active-runs"] });
+      void queryClient.invalidateQueries({ queryKey: ["history"] });
+      if (selectedProcessId === processId) {
+        setSelectedProcessId("");
+        setDraftedPlan(null);
+        setPlanConfirmed(false);
+        setPendingDocs([]);
+        setMessages([]);
+      }
+      setActionNotice(removed ? `Deleted process: "${removed.name}"` : "Process deleted");
+    },
+    onError: (error: unknown) => {
+      const message = error instanceof ApiError ? error.message : "Could not delete the process";
+      setActionNotice(message);
+    },
+  });
+
   const createProcessMutation = useMutation({
     mutationFn: (data: { name: string; description?: string }) =>
       apiClient.createProcess(data),
@@ -184,12 +186,7 @@ export function DiscoveryChatPage() {
       setDraftedPlan(null);
       setPlanConfirmed(false);
       setPendingDocs([]);
-      setCreateError(null);
-      setActionError(null);
       setActionNotice(`Created process: "${created.name}"`);
-    },
-    onError: (err) => {
-      setCreateError(discoveryErrorMessage(err, "Could not create the process."));
     },
   });
 
@@ -203,11 +200,8 @@ export function DiscoveryChatPage() {
       procId: string;
       text: string;
       documentIds: string[];
-      attachments: AttachedDocument[];
-      composerText: string;
     }) => apiClient.chatDiscovery(procId, text, documentIds),
     onSuccess: (reply) => {
-      setActionError(null);
       setMessages((prev) => [
         ...prev,
         {
@@ -220,17 +214,6 @@ export function DiscoveryChatPage() {
         },
       ]);
     },
-    onError: (err, variables) => {
-      setMessages((prev) => {
-        const next = [...prev];
-        const last = next[next.length - 1];
-        if (last?.role === "user" && last.content === variables.text) next.pop();
-        return next;
-      });
-      setInputMessage(variables.composerText);
-      if (variables.attachments.length > 0) setPendingDocs(variables.attachments);
-      setActionError(discoveryErrorMessage(err, "Could not send the discovery message."));
-    },
   });
 
   // Draft plan mutation (Vertex Gemini)
@@ -240,13 +223,9 @@ export function DiscoveryChatPage() {
     onSuccess: (res) => {
       setDraftedPlan(res);
       setPlanConfirmed(res.status === "confirmed");
-      setActionError(null);
       setActionNotice(
-        `Agent 1 drafted plan v${res.version_number} with ${res.plan?.steps?.length || 0} steps.`,
+        `Agent 1 drafted plan v${res.version_number} with ${res.plan?.steps?.length || 0} steps via Vertex Gemini.`,
       );
-    },
-    onError: (err) => {
-      setActionError(discoveryErrorMessage(err, "Could not draft a plan."));
     },
   });
 
@@ -255,13 +234,9 @@ export function DiscoveryChatPage() {
     mutationFn: ({ procId, versionId }: { procId: string; versionId: string }) =>
       apiClient.confirmPlan(procId, versionId),
     onSuccess: () => {
-      setActionError(null);
       setPlanConfirmed(true);
       setActionNotice("Plan confirmed! Ready for Agent 2 (Allocation) and Agent 3 (Risk).");
       void queryClient.invalidateQueries({ queryKey: ["processes"] });
-    },
-    onError: (err) => {
-      setActionError(discoveryErrorMessage(err, "Could not confirm this plan."));
     },
   });
 
@@ -271,6 +246,7 @@ export function DiscoveryChatPage() {
     const files = Array.from(fileList);
     setUploading(true);
     try {
+      const uploaded: AttachedDocument[] = [];
       for (const file of files) {
         const ext = file.name.includes(".")
           ? file.name.slice(file.name.lastIndexOf(".")).toLowerCase()
@@ -289,9 +265,13 @@ export function DiscoveryChatPage() {
           mime_type: file.type || undefined,
           document_type: "discovery",
         });
-        const attached = { id: created.id, name: created.file_name || created.title || file.name };
-        setPendingDocs((prev) => (prev.some((doc) => doc.id === attached.id) ? prev : [...prev, attached]));
+        uploaded.push({ id: created.id, name: created.file_name || created.title || file.name });
       }
+      setPendingDocs((prev) => {
+        const seen = new Set(prev.map((doc) => doc.id));
+        return [...prev, ...uploaded.filter((doc) => !seen.has(doc.id))];
+      });
+      void queryClient.invalidateQueries({ queryKey: ["documents"] });
     } catch (err) {
       const message =
         err instanceof ApiError
@@ -303,7 +283,6 @@ export function DiscoveryChatPage() {
     } finally {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
-      void queryClient.invalidateQueries({ queryKey: ["documents"] });
     }
   }
 
@@ -313,43 +292,18 @@ export function DiscoveryChatPage() {
     const userText = inputMessage.trim();
     if (!userText && pendingDocs.length === 0) return;
 
-    const attachments = pendingDocs;
-    const documentIds = attachments.map((doc) => doc.id);
+    const documentIds = pendingDocs.map((doc) => doc.id);
     const content =
       userText ||
-      `Please use these attached documents as source material: ${attachments.map((doc) => doc.name).join(", ")}`;
+      `Please use these attached documents as source material: ${pendingDocs.map((doc) => doc.name).join(", ")}`;
     setInputMessage("");
     setPendingDocs([]);
     setMessages((prev) => [...prev, { role: "user", content, document_ids: documentIds }]);
-    sendChatMutation.mutate({ procId: selectedProcessId, text: content, documentIds, attachments, composerText: userText });
+    sendChatMutation.mutate({ procId: selectedProcessId, text: content, documentIds });
   };
-
-  useEffect(() => {
-    const log = chatLogRef.current;
-    if (!log) return;
-    log.scrollTop = log.scrollHeight;
-  }, [messages, sendChatMutation.isPending]);
-
-  useEffect(() => {
-    if (!showNewModal) return;
-    processNameInputRef.current?.focus();
-  }, [showNewModal]);
-
-  useEffect(() => {
-    if (!showNewModal) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || createProcessMutation.isPending) return;
-      setShowNewModal(false);
-      setNameError(null);
-      setCreateError(null);
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [showNewModal, createProcessMutation.isPending]);
 
   const handleApplyQuestion = (question: string) => {
     setInputMessage(question);
-    messageInputRef.current?.focus();
   };
 
   return (
@@ -371,14 +325,7 @@ export function DiscoveryChatPage() {
               Interview-driven discovery, dependency extraction, and formal execution plan generation.
             </p>
           </div>
-          <button
-            type="button"
-            onClick={() => {
-              setCreateError(null);
-              setNameError(null);
-              setShowNewModal(true);
-            }}
-          >
+          <button type="button" onClick={() => setShowNewModal(true)}>
             Create process
           </button>
         </div>
@@ -386,59 +333,67 @@ export function DiscoveryChatPage() {
         <div className="discovery-toolbar">
           <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", flex: 1, flexWrap: "wrap" }}>
             <label htmlFor="process-selector">Active process</label>
-            {processesQuery.isLoading ? (
-              <LoadingState label="Loading processes…" />
-            ) : processesQuery.isError ? (
-              <RetryState
-                title="Could not load processes"
-                message={discoveryErrorMessage(
-                  processesQuery.error,
-                  "The process list could not be loaded.",
-                )}
-                onRetry={() => {
-                  void processesQuery.refetch();
-                }}
-              />
-            ) : processes.length === 0 ? (
+            {processes.length === 0 ? (
               <span className="muted">No processes yet. Create one to begin.</span>
             ) : (
-              <select
-                id="process-selector"
-                value={selectedProcessId}
-                onChange={(e) => {
-                  setSelectedProcessId(e.target.value);
-                  setDraftedPlan(null);
-                  setPlanConfirmed(false);
-                  setPendingDocs([]);
-                  setUploadError(null);
-                  setActionError(null);
-                  setActionNotice(null);
-                }}
-                style={{ flex: 1, maxWidth: "400px" }}
-              >
-                {processes.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name} ({p.status})
-                  </option>
-                ))}
-              </select>
+              <>
+                <select
+                  id="process-selector"
+                  value={selectedProcessId}
+                  onChange={(e) => {
+                    setSelectedProcessId(e.target.value);
+                    setDraftedPlan(null);
+                    setPlanConfirmed(false);
+                    setPendingDocs([]);
+                    setUploadError(null);
+                  }}
+                  style={{ flex: 1, maxWidth: "400px" }}
+                >
+                  {processes.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name} ({p.status})
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className="btn btn-danger"
+                  disabled={deleteProcessMutation.isPending || !selectedProcessId}
+                  onClick={() => {
+                    const current = processes.find((item) => item.id === selectedProcessId);
+                    const name = current?.name ?? "this process";
+                    if (
+                      !window.confirm(
+                        `Delete "${name}"? The discovery chat, plan, and any runs for this process will be removed.`,
+                      )
+                    ) {
+                      return;
+                    }
+                    deleteProcessMutation.mutate(selectedProcessId);
+                  }}
+                >
+                  {deleteProcessMutation.isPending ? "Deleting…" : "Delete"}
+                </button>
+              </>
             )}
           </div>
 
           {selectedProcessId ? (
-            <button
-              type="button"
-              className="btn-secondary"
-              onClick={() =>
-                draftPlanMutation.mutate({
-                  procId: selectedProcessId,
-                  documentIds: Array.from(new Set([...sessionDocumentIds, ...pendingDocs.map((d) => d.id)])),
-                })
-              }
-              disabled={draftPlanMutation.isPending || sendChatMutation.isPending}
-            >
-              {draftPlanMutation.isPending ? "Drafting plan…" : "Draft plan"}
-            </button>
+            <>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() =>
+                  draftPlanMutation.mutate({
+                    procId: selectedProcessId,
+                    documentIds: Array.from(new Set([...sessionDocumentIds, ...pendingDocs.map((d) => d.id)])),
+                  })
+                }
+                disabled={draftPlanMutation.isPending}
+              >
+                {draftPlanMutation.isPending ? "Drafting plan…" : "Draft plan"}
+              </button>
+            </>
           ) : null}
         </div>
 
@@ -446,15 +401,6 @@ export function DiscoveryChatPage() {
           <div className="notice-banner" role="status" aria-live="polite">
             <span>{actionNotice}</span>
             <button type="button" className="ghost-btn" onClick={() => setActionNotice(null)}>
-              Dismiss
-            </button>
-          </div>
-        ) : null}
-
-        {actionError ? (
-          <div className="chat-upload-error discovery-action-error" role="alert">
-            <span>{actionError}</span>
-            <button type="button" className="ghost-btn" onClick={() => setActionError(null)}>
               Dismiss
             </button>
           </div>
@@ -470,15 +416,12 @@ export function DiscoveryChatPage() {
               <form
                 onSubmit={(e) => {
                   e.preventDefault();
-                  if (!newProcessName.trim()) {
-                    setNameError("Enter a process name.");
-                    return;
+                  if (newProcessName.trim()) {
+                    createProcessMutation.mutate({
+                      name: newProcessName.trim(),
+                      description: newProcessDesc.trim() || undefined,
+                    });
                   }
-                  setNameError(null);
-                  createProcessMutation.mutate({
-                    name: newProcessName.trim(),
-                    description: newProcessDesc.trim() || undefined,
-                  });
                 }}
               >
                 <div style={{ marginBottom: "1rem" }}>
@@ -486,25 +429,14 @@ export function DiscoveryChatPage() {
                     Process Name *
                   </label>
                   <input
-                    ref={processNameInputRef}
                     id="new-proc-name"
                     type="text"
                     required
                     placeholder="e.g. Vendor Onboarding & Purchasing Approval"
                     value={newProcessName}
-                    onChange={(e) => {
-                      setNewProcessName(e.target.value);
-                      if (nameError) setNameError(null);
-                    }}
-                    aria-invalid={Boolean(nameError)}
-                    aria-describedby={nameError ? "new-proc-name-error" : undefined}
+                    onChange={(e) => setNewProcessName(e.target.value)}
                     style={{ width: "100%" }}
                   />
-                  {nameError ? (
-                    <p id="new-proc-name-error" className="chat-upload-error" role="alert">
-                      {nameError}
-                    </p>
-                  ) : null}
                 </div>
                 <div style={{ marginBottom: "1.25rem" }}>
                   <label htmlFor="new-proc-desc" style={{ display: "block", marginBottom: "0.35rem" }}>
@@ -519,28 +451,11 @@ export function DiscoveryChatPage() {
                     style={{ width: "100%" }}
                   />
                 </div>
-                {createError ? (
-                  <p className="chat-upload-error" role="alert" style={{ marginBottom: "0.75rem" }}>
-                    {createError}
-                  </p>
-                ) : null}
                 <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.5rem" }}>
-                  <button
-                    type="button"
-                    className="ghost-btn"
-                    onClick={() => {
-                      setShowNewModal(false);
-                      setNameError(null);
-                      setCreateError(null);
-                    }}
-                    disabled={createProcessMutation.isPending}
-                  >
+                  <button type="button" className="ghost-btn" onClick={() => setShowNewModal(false)}>
                     Cancel
                   </button>
-                  <button
-                    type="submit"
-                    disabled={createProcessMutation.isPending || !newProcessName.trim()}
-                  >
+                  <button type="submit" disabled={createProcessMutation.isPending}>
                     {createProcessMutation.isPending ? "Creating…" : "Create process"}
                   </button>
                 </div>
@@ -551,35 +466,13 @@ export function DiscoveryChatPage() {
 
         <div className={draftedPlan ? "discovery-grid" : "discovery-grid solo"}>
           <div className="chat-panel">
-            <div
-              className="chat-log"
-              ref={chatLogRef}
-              role="log"
-              aria-label="Discovery conversation"
-              aria-busy={sendChatMutation.isPending}
-            >
+            <div className="chat-log">
               {chatHistoryQuery.isLoading ? (
                 <LoadingState label="Loading conversation…" />
-              ) : chatHistoryQuery.isError ? (
-                <RetryState
-                  title="Could not load the conversation"
-                  message={discoveryErrorMessage(
-                    chatHistoryQuery.error,
-                    "Discovery history could not be loaded.",
-                  )}
-                  onRetry={() => {
-                    void chatHistoryQuery.refetch();
-                  }}
-                />
-              ) : !selectedProcessId ? (
-                <EmptyState
-                  title="No process selected"
-                  description="Create a process to start discovery."
-                />
               ) : (
                 messages.map((m, idx) => (
                   <div
-                    key={m.id ?? `${m.role}-${idx}`}
+                    key={idx}
                     className={`chat-bubble ${m.role === "assistant" ? "assistant" : "user"}`}
                   >
                     <div style={{ fontSize: "0.75rem", opacity: 0.8, marginBottom: "0.25rem", fontWeight: 600 }}>
@@ -645,13 +538,12 @@ export function DiscoveryChatPage() {
                   multiple
                   accept={ACCEPTED_EXTENSIONS.join(",")}
                   disabled={!selectedProcessId || uploading || sendChatMutation.isPending}
-                  aria-describedby={uploadError ? "discovery-upload-error" : undefined}
                   onChange={(e) => void handleFilesSelected(e.target.files)}
                 />
-                <label htmlFor="discovery-document-upload">
+                <div>
                   <strong>Upload documents</strong>
                   <p>PDF, Word, Excel, CSV, text, Markdown, or email. Up to 25 MB each.</p>
-                </label>
+                </div>
               </div>
               {pendingDocs.length > 0 ? (
                 <div className="chat-attachments" aria-label="Documents to send">
@@ -677,7 +569,7 @@ export function DiscoveryChatPage() {
                 </p>
               ) : null}
               {uploadError ? (
-                <p id="discovery-upload-error" className="chat-upload-error" role="alert">
+                <p className="chat-upload-error" role="alert">
                   {uploadError}
                 </p>
               ) : null}
@@ -690,7 +582,6 @@ export function DiscoveryChatPage() {
                       : "Select or create a process first…"
                   }
                   disabled={!selectedProcessId || sendChatMutation.isPending || uploading}
-                  ref={messageInputRef}
                   value={inputMessage}
                   onChange={(e) => setInputMessage(e.target.value)}
                   aria-label="Discovery message"
@@ -704,7 +595,7 @@ export function DiscoveryChatPage() {
                     (!inputMessage.trim() && pendingDocs.length === 0)
                   }
                 >
-                  {sendChatMutation.isPending ? "Sending…" : "Send"}
+                  Send
                 </button>
               </div>
             </form>
@@ -746,9 +637,6 @@ export function DiscoveryChatPage() {
                 Execution Steps ({draftedPlan.plan?.steps?.length || 0})
               </h4>
               <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
-                {(draftedPlan.plan?.steps || []).length === 0 ? (
-                  <p className="muted">This draft has no execution steps yet.</p>
-                ) : null}
                 {(draftedPlan.plan?.steps || []).map((step, idx) => (
                   <div
                     key={step.step_id || idx}

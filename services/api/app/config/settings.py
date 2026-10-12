@@ -69,6 +69,13 @@ class Settings(BaseSettings):
             "gcp_application_credentials",
         ),
     )
+    google_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "google_api_key",
+            "gemini_api_key",
+        ),
+    )
 
     gemini_planner_model: str | None = None
     gemini_resource_model: str | None = None
@@ -85,9 +92,6 @@ class Settings(BaseSettings):
     gemini_circuit_failure_threshold: int = 5
     gemini_circuit_reset_seconds: float = 60.0
     gemini_client_mode: Literal["auto", "vertex", "fake"] = "auto"
-    # Gemini Developer API key. When set in auto mode, calls use this key
-    # instead of Vertex AI project credentials.
-    gemini_api_key: str | None = None
 
     # Integration providers (mock by default; real only when credentials present)
     integrations_mode: Literal["mock", "auto"] = "mock"
@@ -148,10 +152,13 @@ class Settings(BaseSettings):
             return max(self.rate_limit_per_minute, 10_000)
         return self.rate_limit_per_minute
 
-    def gemini_uses_api_key(self) -> bool:
-        return bool(self.gemini_api_key and self.gemini_api_key.strip()) and (
-            self.gemini_client_mode != "vertex"
-        )
+    def uses_gemini_api_key(self) -> bool:
+        """True when the Gemini Developer API key should be used instead of Vertex ADC."""
+        if not self.google_api_key:
+            return False
+        if not self.google_genai_use_vertexai:
+            return True
+        return not bool(self.google_cloud_project)
 
     def gemini_configured(self) -> bool:
         has_model = bool(
@@ -160,11 +167,10 @@ class Settings(BaseSettings):
             or self.gemini_risk_model
             or self.gemini_execution_model
             or self.gemini_model_id
-            or self.gemini_fallback_model
         )
         if not has_model:
             return False
-        if self.gemini_uses_api_key():
+        if self.google_api_key:
             return True
         return bool(self.google_cloud_project)
 

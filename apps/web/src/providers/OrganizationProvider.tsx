@@ -22,19 +22,19 @@ type OrganizationContextValue = {
   setActiveOrganizationId: (id: string) => void;
   can: (permission: Permission) => boolean;
   hasFeature: (feature: string) => boolean;
-  refetch: () => void;
+  refetch: () => Promise<unknown>;
 };
 
 const OrganizationContext = createContext<OrganizationContextValue | null>(null);
 
 export function OrganizationProvider({ children }: { children: ReactNode }) {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, user } = useAuth();
   const [activeId, setActiveId] = useState<string | null>(() =>
     sessionStore.getOrganizationId(),
   );
 
   const query = useQuery({
-    queryKey: ["organizations"],
+    queryKey: ["organizations", user?.id],
     queryFn: () => apiClient.listOrganizations(),
     enabled: isAuthenticated,
     retry: (failureCount, error) => {
@@ -79,9 +79,7 @@ export function OrganizationProvider({ children }: { children: ReactNode }) {
         activeOrganization
           ? planHasFeature(activeOrganization.plan_code, feature)
           : false,
-      refetch: () => {
-        void query.refetch();
-      },
+      refetch: () => query.refetch(),
     }),
     [organizations, activeOrganization, query, setActiveOrganizationId],
   );

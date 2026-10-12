@@ -20,9 +20,85 @@ import type {
   SupplierProduct,
 } from "@bpm/frontend-types";
 import { ApiError } from "./apiClient";
+import { sessionStore } from "./sessionStore";
 
 const ORG_ID = "11111111-1111-1111-1111-111111111111";
 const ORG_B = "22222222-2222-2222-2222-222222222222";
+const DEMO_USER_ID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+const WORKSPACE_KEY = "bpm.mock_workspaces";
+
+type MockWorkspace = {
+  organizations: Organization[];
+  processesByOrg: Record<string, ProcessSummary[]>;
+};
+
+function currentMockUserId(): string {
+  const token = sessionStore.getToken();
+  if (token?.startsWith("mock-access-token:")) {
+    return token.slice("mock-access-token:".length);
+  }
+  return sessionStore.getUser()?.id ?? DEMO_USER_ID;
+}
+
+function isDemoUser(userId = currentMockUserId()): boolean {
+  return userId === DEMO_USER_ID;
+}
+
+function isSeedOrganization(orgId: string | null): boolean {
+  return !orgId || orgId === ORG_ID || orgId === ORG_B;
+}
+
+function readWorkspaces(): Record<string, MockWorkspace> {
+  try {
+    const raw = localStorage.getItem(WORKSPACE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, MockWorkspace>;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function readWorkspace(userId: string): MockWorkspace {
+  const stored = readWorkspaces()[userId];
+  return {
+    organizations: stored?.organizations ?? [],
+    processesByOrg: stored?.processesByOrg ?? {},
+  };
+}
+
+function writeWorkspace(userId: string, workspace: MockWorkspace): void {
+  const all = readWorkspaces();
+  all[userId] = workspace;
+  localStorage.setItem(WORKSPACE_KEY, JSON.stringify(all));
+}
+
+function organizationsForCurrentUser(): Organization[] {
+  if (isDemoUser()) return ORGS;
+  return readWorkspace(currentMockUserId()).organizations;
+}
+
+function processesForCurrentUser(): ProcessSummary[] {
+  const orgId = sessionStore.getOrganizationId();
+  if (isDemoUser() && isSeedOrganization(orgId)) return PROCESSES;
+  if (!orgId) return [];
+  return readWorkspace(currentMockUserId()).processesByOrg[orgId] ?? [];
+}
+
+function rememberProcess(process: ProcessSummary): void {
+  const orgId = sessionStore.getOrganizationId();
+  const userId = currentMockUserId();
+  if (isDemoUser() && isSeedOrganization(orgId)) {
+    PROCESSES.push(process);
+    return;
+  }
+  if (!orgId) return;
+  const workspace = readWorkspace(userId);
+  const list = workspace.processesByOrg[orgId] ?? [];
+  list.push(process);
+  workspace.processesByOrg[orgId] = list;
+  writeWorkspace(userId, workspace);
+}
 
 const ORGS: Organization[] = [
   {
@@ -131,6 +207,34 @@ const PROCESS_RUNS: ProcessRun[] = [
     dry_run: false,
     current_step_index: 0,
     pause_reason: "Missing renewal quote attachment",
+  },
+  {
+    id: "55555555-5555-5555-5555-555555555503",
+    organization_id: ORG_ID,
+    process_id: "33333333-3333-3333-3333-333333333301",
+    process_version_id: null,
+    status: "completed",
+    initiated_by_user_id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+    correlation_id: "corr-run-laptop-done",
+    created_at: new Date(Date.now() - 1000 * 60 * 60 * 26).toISOString(),
+    updated_at: new Date(Date.now() - 1000 * 60 * 60 * 24).toISOString(),
+    dry_run: false,
+    current_step_index: 4,
+    pause_reason: null,
+  },
+  {
+    id: "55555555-5555-5555-5555-555555555504",
+    organization_id: ORG_ID,
+    process_id: "33333333-3333-3333-3333-333333333303",
+    process_version_id: null,
+    status: "cancelled",
+    initiated_by_user_id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+    correlation_id: "corr-run-software-cancelled",
+    created_at: new Date(Date.now() - 1000 * 60 * 60 * 8).toISOString(),
+    updated_at: new Date(Date.now() - 1000 * 60 * 60 * 6).toISOString(),
+    dry_run: false,
+    current_step_index: 1,
+    pause_reason: "Requester cancelled the renewal",
   },
 ];
 
@@ -738,17 +842,25 @@ export const mockApi = {
         checks: [{ name: "mock", ready: true, detail: "mock mode" }],
       } as T;
     }
-    if (path === "/auth/organizations") return ORGS as T;
+    if (path === "/auth/organizations") return organizationsForCurrentUser() as T;
     if (path === "/organizations" && method === "POST") {
+      const demoCreate = isDemoUser();
       const newOrg: Organization = {
-        id: "00000000-0000-0000-0000-000000000099",
+        id: demoCreate ? "00000000-0000-0000-0000-000000000099" : crypto.randomUUID(),
         name: String(body.name || "Acme Corporation"),
         slug: String(body.name || "acme-corp").toLowerCase().replace(/[^a-z0-9]+/g, "-"),
         plan_code: (body.plan_code as Organization["plan_code"]) || "pro",
         status: "active",
         membership_role: "owner",
       };
-      ORGS.push(newOrg);
+      if (demoCreate) {
+        ORGS.push(newOrg);
+      } else {
+        const userId = currentMockUserId();
+        const workspace = readWorkspace(userId);
+        workspace.organizations.push(newOrg);
+        writeWorkspace(userId, workspace);
+      }
       return newOrg as T;
     }
     if (path === "/boom") {
@@ -829,7 +941,12 @@ export const mockApi = {
             : "intermediate",
         availability_percent: Number(body.availability_percent ?? 100),
         weekly_capacity_hours: Number(body.weekly_capacity_hours ?? 40),
-        current_workload_percent: Number(body.current_workload_percent ?? 0),
+        baseline_workload_percent: Number(
+          body.baseline_workload_percent ?? body.current_workload_percent ?? 0,
+        ),
+        current_workload_percent: Number(
+          body.baseline_workload_percent ?? body.current_workload_percent ?? 0,
+        ),
         cost_per_hour: (body.cost_per_hour as number | null) ?? null,
         monthly_cost: (body.monthly_cost as number | null) ?? null,
         max_allocation_percent: Number(body.max_allocation_percent ?? 100),
@@ -856,12 +973,23 @@ export const mockApi = {
       const index = employees.findIndex((employee) => employee.id === id);
       if (index < 0) throw new ApiError("Not found", { code: "NOT_FOUND", status: 404 });
       const current = employees[index];
+      const editable = { ...body };
+      delete editable.current_workload_percent;
+      const baseline =
+        typeof editable.baseline_workload_percent === "number"
+          ? editable.baseline_workload_percent
+          : current.baseline_workload_percent;
       const next: Employee = {
         ...current,
-        ...(body as Partial<Employee>),
+        ...(editable as Partial<Employee>),
         id: current.id,
         organization_id: current.organization_id,
         employee_code: current.employee_code,
+        baseline_workload_percent: baseline ?? current.baseline_workload_percent ?? 0,
+        current_workload_percent:
+          typeof editable.baseline_workload_percent === "number"
+            ? editable.baseline_workload_percent
+            : current.current_workload_percent,
       };
       employees = employees.map((employee) => (employee.id === id ? next : employee));
       return next as T;
@@ -1204,9 +1332,20 @@ export const mockApi = {
       return { created_ids, created_count: created_ids.length } satisfies ImportCommit as T;
     }
 
+    const deleteProcessMatch = path.match(/^\/processes\/([^/]+)$/);
+    if (deleteProcessMatch && method === "DELETE") {
+      const id = deleteProcessMatch[1];
+      const index = PROCESSES.findIndex((item) => item.id === id);
+      if (index < 0) {
+        throw new ApiError("Process not found", { code: "NOT_FOUND", status: 404 });
+      }
+      PROCESSES.splice(index, 1);
+      return undefined as T;
+    }
     if (path === "/processes" && method === "POST") {
+      const seedProcess = isDemoUser() && isSeedOrganization(sessionStore.getOrganizationId());
       const newProc: ProcessSummary = {
-        id: "00000000-0000-0000-0000-000000000099",
+        id: seedProcess ? "00000000-0000-0000-0000-000000000099" : crypto.randomUUID(),
         name: String(body.name || "New Process"),
         status: "draft",
         risk_level: null,
@@ -1223,13 +1362,13 @@ export const mockApi = {
         has_execution: false,
         updated_at: new Date().toISOString(),
       };
-      PROCESSES.push(newProc);
+      rememberProcess(newProc);
       return newProc as T;
     }
-    if (path === "/processes/summaries") return PROCESSES as T;
+    if (path === "/processes/summaries") return processesForCurrentUser() as T;
     if (path.startsWith("/processes/summaries/")) {
       const id = path.split("/").pop();
-      const found = PROCESSES.find((p) => p.id === id);
+      const found = processesForCurrentUser().find((p) => p.id === id);
       if (!found) {
         throw new ApiError("Process not found", { code: "NOT_FOUND", status: 404 });
       }
@@ -1283,7 +1422,7 @@ export const mockApi = {
     }
     if (path.endsWith("/complete") && method === "POST") {
       const id = path.split("/")[2];
-      const found = PROCESSES.find((p) => p.id === id);
+      const found = processesForCurrentUser().find((p) => p.id === id);
       if (!found) {
         throw new ApiError("Process not found", { code: "NOT_FOUND", status: 404 });
       }
@@ -1297,6 +1436,18 @@ export const mockApi = {
       found.execution_status = "completed";
       found.human_decision = found.human_decision || "Marked complete";
       found.updated_at = new Date().toISOString();
+      if (!PROCESSES.includes(found)) {
+        const orgId = sessionStore.getOrganizationId();
+        if (orgId) {
+          const userId = currentMockUserId();
+          const workspace = readWorkspace(userId);
+          const list = workspace.processesByOrg[orgId] ?? [];
+          const index = list.findIndex((item) => item.id === found.id);
+          if (index >= 0) list[index] = { ...found };
+          workspace.processesByOrg[orgId] = list;
+          writeWorkspace(userId, workspace);
+        }
+      }
       const run = PROCESS_RUNS.find((r) => r.process_id === id);
       if (run && !["completed", "cancelled", "failed"].includes(run.status)) {
         run.status = "completed";
@@ -1363,6 +1514,348 @@ export const mockApi = {
       return {
         items: items.slice(offset, offset + limit),
         meta: { total: items.length, limit, offset },
+      } as T;
+    }
+
+    // ── Agent 4 execution hub (mock) ─────────────────────────────
+    const pathNoQuery = path.split("?")[0];
+    const execMatch = pathNoQuery.match(/^\/processes\/([^/]+)\/execution(.*)$/);
+    if (execMatch) {
+      const processId = execMatch[1];
+      const rest = execMatch[2] || "";
+      const foundRun = PROCESS_RUNS.find((r) => r.process_id === processId);
+      const emptyState = {
+        process_id: processId,
+        process_run_id: "00000000-0000-0000-0000-000000000000",
+        status: "not_run",
+        dry_run: false,
+        current_step_index: 0,
+        pause_reason: "Agent 4 has not been run yet.",
+        tool_invocations: [] as unknown[],
+        human_checkpoints: [] as string[],
+        stop_conditions: [] as string[],
+        available_tools: ["supplier.search", "email.send", "notification.send", "document.generate"],
+        email_outbox: [] as unknown[],
+        generated_documents: [] as unknown[],
+        calendar_events: [] as unknown[],
+        tasks: [] as unknown[],
+        notifications: [] as unknown[],
+        execution_intelligence: {
+          executed_tools: [],
+          outbound_already_sent: [],
+          step_checklist: { complete: false, step_kind: "general", remaining: [] },
+          email_send_count: 0,
+          max_email_send_per_run: 2,
+          plan_step_count: 1,
+          current_step_title: "Ready",
+        },
+        playbook: [
+          {
+            index: 0,
+            title: "Execute plan",
+            description: "Run controlled tools for this process",
+            status: "pending",
+            step_kind: "general",
+            remaining: [],
+            allowed_tools: ["supplier.search", "email.send"],
+          },
+        ],
+        scorecard: { tools_total: 0, tools_successful: 0, success_rate: 0, steps_total: 1, steps_completed: 0 },
+        operator: {
+          guidance: "",
+          blocked_tools: [],
+          skipped_proposals: [],
+          guidance_history: [],
+          email_guard_enabled: true,
+          stuck_strikes: 0,
+        },
+      };
+
+      const liveState = () => {
+        if (!foundRun) return emptyState;
+        return {
+          ...emptyState,
+          process_run_id: foundRun.id,
+          status: foundRun.status === "executing" ? "executing" : foundRun.status === "blocked" ? "paused" : foundRun.status,
+          current_step_index: foundRun.current_step_index ?? 0,
+          pause_reason: foundRun.pause_reason,
+          dry_run: foundRun.dry_run ?? false,
+          tool_invocations:
+            foundRun.status === "executing" || foundRun.status === "completed"
+              ? [
+                  {
+                    id: "mock-inv-1",
+                    tool_name: "supplier.search",
+                    status: "executed",
+                    created_at: new Date().toISOString(),
+                    result: { data: { query: "Hardware" } },
+                  },
+                  {
+                    id: "mock-inv-2",
+                    tool_name: "notification.send",
+                    status: "executed",
+                    created_at: new Date().toISOString(),
+                    result: { data: { title: "Update" } },
+                  },
+                ]
+              : [],
+          playbook: [
+            {
+              index: 0,
+              title: "Search & notify",
+              description: "Find suppliers and notify stakeholders",
+              status: "active",
+              step_kind: "procure",
+              remaining: ["supplier.request_quote"],
+              allowed_tools: ["supplier.search", "supplier.request_quote", "email.send"],
+            },
+          ],
+          scorecard: {
+            tools_total: 2,
+            tools_successful: 2,
+            tools_failed_or_denied: 0,
+            success_rate: 100,
+            steps_total: 1,
+            steps_completed: 0,
+            quotes_requested: 0,
+            purchase_orders_submitted: 0,
+            documents: 0,
+          },
+          execution_intelligence: {
+            ...emptyState.execution_intelligence,
+            executed_tools: ["supplier.search", "notification.send"],
+            plan_step_count: 1,
+            current_step_title: "Search & notify",
+            step_checklist: {
+              complete: false,
+              step_kind: "procure",
+              remaining: ["supplier.request_quote"],
+            },
+          },
+        };
+      };
+
+      if (rest === "" && method === "GET") {
+        return liveState() as T;
+      }
+      if (rest === "/report" && method === "GET") {
+        const state = liveState();
+        return {
+          process_id: processId,
+          process_name: PROCESSES.find((p) => p.id === processId)?.name || "Process",
+          process_run_id: state.process_run_id,
+          status: state.status,
+          dry_run: false,
+          plan_goal: "Mock execution report",
+          steps_total: 1,
+          steps_completed: state.current_step_index,
+          tools_invoked_total: state.tool_invocations.length,
+          tools_successful: state.tool_invocations.length,
+          tools_failed: 0,
+          generated_documents_count: 0,
+          emails_count: 0,
+          calendar_events_count: 0,
+          tasks_count: 0,
+          notifications_count: 0,
+          invocations: state.tool_invocations,
+          generated_at: new Date().toISOString(),
+        } as T;
+      }
+      if ((rest === "" || rest === "/advance") && method === "POST") {
+        let run = foundRun;
+        if (!run) {
+          run = {
+            id: crypto.randomUUID(),
+            organization_id: ORG_ID,
+            process_id: processId,
+            process_version_id: null,
+            status: "executing",
+            initiated_by_user_id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            correlation_id: "corr-mock-exec",
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+            dry_run: false,
+            current_step_index: 0,
+            pause_reason: null,
+          };
+          PROCESS_RUNS.push(run);
+        } else {
+          run.status = "executing";
+          run.current_step_index = Math.min((run.current_step_index ?? 0) + 1, 3);
+          run.updated_at = new Date().toISOString();
+        }
+        const proc = PROCESSES.find((p) => p.id === processId);
+        if (proc) {
+          proc.has_execution = true;
+          proc.execution_status = "invoking_tool";
+          proc.updated_at = new Date().toISOString();
+        }
+        return liveState() as T;
+      }
+      if (rest === "/pause" && method === "POST") {
+        if (foundRun) {
+          foundRun.status = "paused";
+          foundRun.pause_reason = "Paused by operator";
+          foundRun.updated_at = new Date().toISOString();
+        }
+        return liveState() as T;
+      }
+      if (rest === "/resume" && method === "POST") {
+        if (foundRun) {
+          foundRun.status = "executing";
+          foundRun.pause_reason = null;
+          foundRun.updated_at = new Date().toISOString();
+        }
+        return liveState() as T;
+      }
+      if (rest === "/cancel" && method === "POST") {
+        if (foundRun) {
+          foundRun.status = "cancelled";
+          foundRun.updated_at = new Date().toISOString();
+        }
+        return liveState() as T;
+      }
+      if (rest === "/reset" && method === "POST") {
+        if (foundRun) {
+          foundRun.status = "draft";
+          foundRun.current_step_index = 0;
+          foundRun.pause_reason = null;
+          foundRun.updated_at = new Date().toISOString();
+        }
+        return liveState() as T;
+      }
+      if (rest === "/steer" && method === "POST") {
+        const state = liveState() as any;
+        if (body.guidance) state.operator.guidance = String(body.guidance);
+        if (Array.isArray(body.block_tools)) {
+          state.operator.blocked_tools = [
+            ...new Set([...(state.operator.blocked_tools || []), ...body.block_tools]),
+          ];
+        }
+        if (typeof body.email_guard_enabled === "boolean") {
+          state.operator.email_guard_enabled = body.email_guard_enabled;
+        }
+        return state as T;
+      }
+      if (rest === "/skip" && method === "POST") {
+        const state = liveState() as any;
+        state.operator.skipped_proposals = [
+          ...(state.operator.skipped_proposals || []),
+          { tool_name: body.tool_name, reason: body.reason || "skipped", at: new Date().toISOString() },
+        ];
+        if (body.tool_name) {
+          state.operator.blocked_tools = [
+            ...new Set([...(state.operator.blocked_tools || []), String(body.tool_name)]),
+          ];
+        }
+        if (body.advance_step && foundRun) {
+          foundRun.current_step_index = (foundRun.current_step_index ?? 0) + 1;
+        }
+        return state as T;
+      }
+      if (rest === "/tools" && method === "POST") {
+        return {
+          id: crypto.randomUUID(),
+          tool_name: body.tool_name,
+          status: "executed",
+          arguments: body.arguments || {},
+          result: { ok: true, data: body.arguments || {}, mock: true },
+          created_at: new Date().toISOString(),
+        } as T;
+      }
+      if (rest.startsWith("/propose") && method === "POST") {
+        return {
+          tool_name: "supplier.search",
+          arguments: { query: "Hardware" },
+          rationale: "Mock proposal",
+          requires_approval: false,
+        } as T;
+      }
+    }
+
+    if (path === "/tools" && method === "GET") {
+      return [
+        { name: "supplier.search", risk_level: "low", side_effect_status: "none" },
+        { name: "email.send", risk_level: "high", side_effect_status: "external" },
+        { name: "notification.send", risk_level: "low", side_effect_status: "internal" },
+        { name: "document.generate", risk_level: "medium", side_effect_status: "write" },
+        { name: "supplier.request_quote", risk_level: "medium", side_effect_status: "external" },
+        { name: "purchase_order.create_draft", risk_level: "high", side_effect_status: "write" },
+      ] as T;
+    }
+
+    if (path.match(/^\/processes\/[^/]+\/quotations$/) && method === "GET") {
+      return { items: [] } as T;
+    }
+    if (path.match(/^\/processes\/[^/]+\/quotations\/compare$/) && method === "POST") {
+      return {
+        winner_quotation_id: null,
+        explanation: "No quotations available in mock mode.",
+        scores: {},
+      } as T;
+    }
+    if (path.match(/^\/processes\/[^/]+\/purchase-orders$/) && method === "GET") {
+      return { items: [] } as T;
+    }
+    if (path.match(/^\/processes\/[^/]+\/execute$/) && method === "POST") {
+      const processId = path.split("/")[2];
+      const existing = PROCESS_RUNS.find((r) => r.process_id === processId);
+      if (!existing) {
+        PROCESS_RUNS.push({
+          id: crypto.randomUUID(),
+          organization_id: ORG_ID,
+          process_id: processId,
+          process_version_id: null,
+          status: "executing",
+          initiated_by_user_id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+          correlation_id: "corr-mock-start",
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          dry_run: false,
+          current_step_index: 1,
+          pause_reason: null,
+        });
+      } else {
+        existing.status = "executing";
+        existing.updated_at = new Date().toISOString();
+      }
+      const proc = PROCESSES.find((p) => p.id === processId);
+      if (proc) {
+        proc.has_execution = true;
+        proc.execution_status = "invoking_tool";
+      }
+      // Re-enter via recursive shape: return execution-like payload
+      return {
+        process_id: processId,
+        process_run_id: PROCESS_RUNS.find((r) => r.process_id === processId)!.id,
+        status: "executing",
+        dry_run: false,
+        current_step_index: 1,
+        tool_invocations: [
+          {
+            id: "mock-start-1",
+            tool_name: "supplier.search",
+            status: "executed",
+            created_at: new Date().toISOString(),
+          },
+        ],
+        playbook: [],
+        scorecard: { tools_total: 1, tools_successful: 1, success_rate: 100, steps_total: 1, steps_completed: 0 },
+        operator: { guidance: "", blocked_tools: [], email_guard_enabled: true, stuck_strikes: 0 },
+        execution_intelligence: {
+          executed_tools: ["supplier.search"],
+          email_send_count: 0,
+          max_email_send_per_run: 2,
+          plan_step_count: 1,
+          current_step_title: "Execute",
+          step_checklist: { complete: false, remaining: [], step_kind: "general" },
+          outbound_already_sent: [],
+        },
+        email_outbox: [],
+        generated_documents: [],
+        calendar_events: [],
+        tasks: [],
+        notifications: [],
       } as T;
     }
 

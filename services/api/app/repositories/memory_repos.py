@@ -242,6 +242,11 @@ class EmployeeRepository(TenantRepository):
             "department_id",
             "is_manager",
         }
+        if (
+            kwargs.get("baseline_workload_percent") is None
+            and kwargs.get("current_workload_percent") is not None
+        ):
+            kwargs["baseline_workload_percent"] = kwargs["current_workload_percent"]
         profile = {
             key: value
             for key, value in kwargs.items()
@@ -275,12 +280,13 @@ class EmployeeRepository(TenantRepository):
     def update(self, employee_id: UUID, **fields: Any) -> EmployeeRecord:
         record = self.get(employee_id)
         for key, value in fields.items():
-            if key not in MUTABLE_FIELDS:
+            if key == "current_workload_percent" or key not in MUTABLE_FIELDS:
                 continue
             if value is None and key not in CLEARABLE_FIELDS:
                 continue
             setattr(record, key, value)
         record.updated_at = utcnow()
+        self.store.employees[record.id] = record
         return record
 
 
@@ -988,7 +994,101 @@ class ProcessRepository(TenantRepository):
 
         if get_settings().persistence_mode == "postgres":
             persist_mutation(self.store, "processes", record.id)
+        if status in {"completed", "cancelled"}:
+            from app.services.workload import recompute_organization_workload
+
+            recompute_organization_workload(self.organization_id)
         return record
+
+    def delete(self, process_id: UUID) -> None:
+        """Remove a process and the chat, plan, allocation, risk, and runs stored with it."""
+        self.get(process_id)
+        store = self.store
+        run_ids = {
+            run.id
+            for run in store.process_runs.values()
+            if run.organization_id == self.organization_id and run.process_id == process_id
+        }
+        session_ids = {
+            session.id
+            for session in store.discovery_sessions.values()
+            if session.organization_id == self.organization_id and session.process_id == process_id
+        }
+
+        from app.config import get_settings
+        from app.database.postgres_persistence import delete_process_persistence
+
+        if get_settings().persistence_mode == "postgres":
+            delete_process_persistence(self.organization_id, process_id)
+
+        def drop_records(mapping: dict[Any, Any]) -> None:
+            for key, value in list(mapping.items()):
+                if _record_belongs_to_process(
+                    value,
+                    organization_id=self.organization_id,
+                    process_id=process_id,
+                    run_ids=run_ids,
+                    session_ids=session_ids,
+                ):
+                    mapping.pop(key, None)
+
+        for mapping in (
+            store.process_versions,
+            store.discovery_sessions,
+            store.discovery_messages,
+            store.allocations,
+            store.risk_results,
+            store.approvals,
+            store.process_runs,
+            store.tool_invocations,
+            store.email_outbox,
+            store.quote_requests,
+            store.quotations,
+            store.purchase_orders,
+            store.notifications,
+            store.tasks,
+            store.generated_documents,
+            store.calendar_events,
+            store.workflow_instances,
+            store.agent_run_records,
+        ):
+            drop_records(mapping)
+
+        store.discovery_events.pop(process_id, None)
+        for run_id in run_ids:
+            store.run_events.pop(run_id, None)
+        store.processes.pop(process_id, None)
+
+
+def _record_belongs_to_process(
+    value: Any,
+    *,
+    organization_id: UUID,
+    process_id: UUID,
+    run_ids: set[UUID],
+    session_ids: set[UUID],
+) -> bool:
+    if isinstance(value, dict):
+        org = value.get("organization_id")
+        if org is not None and str(org) != str(organization_id):
+            return False
+        pid = value.get("process_id") or value.get("process_definition_id")
+        if pid is not None and str(pid) == str(process_id):
+            return True
+        run_id = value.get("process_run_id")
+        if run_id is not None and str(run_id) in {str(item) for item in run_ids}:
+            return True
+        return False
+
+    org = getattr(value, "organization_id", None)
+    if org != organization_id:
+        return False
+    if getattr(value, "process_id", None) == process_id:
+        return True
+    if getattr(value, "session_id", None) in session_ids:
+        return True
+    run_id = getattr(value, "process_run_id", None)
+    return run_id in run_ids
 
 
 class ApprovalRepository(TenantRepository):
@@ -1112,6 +1212,14 @@ class ProcessRunRepository(TenantRepository):
                 "status": status.value,
             }
         )
+        if status in {
+            ProcessRunStatus.COMPLETED,
+            ProcessRunStatus.CANCELLED,
+            ProcessRunStatus.FAILED,
+        }:
+            from app.services.workload import recompute_organization_workload
+
+            recompute_organization_workload(self.organization_id)
         return record
 
     def events(self, run_id: UUID) -> list[dict[str, Any]]:

@@ -117,6 +117,7 @@ class EmployeeCreate(APIModel):
     skill_level: Literal["beginner", "intermediate", "expert"] = "intermediate"
     availability_percent: float = Field(default=100, ge=0, le=100)
     weekly_capacity_hours: float = Field(default=40, ge=0, le=168)
+    baseline_workload_percent: float = Field(default=0, ge=0, le=100)
     current_workload_percent: float = Field(default=0, ge=0, le=100)
     cost_per_hour: float | None = Field(default=None, ge=0)
     monthly_cost: float | None = Field(default=None, ge=0)
@@ -195,6 +196,7 @@ class EmployeeUpdate(APIModel):
     skill_level: Literal["beginner", "intermediate", "expert"] | None = None
     availability_percent: float | None = Field(default=None, ge=0, le=100)
     weekly_capacity_hours: float | None = Field(default=None, ge=0, le=168)
+    baseline_workload_percent: float | None = Field(default=None, ge=0, le=100)
     current_workload_percent: float | None = Field(default=None, ge=0, le=100)
     cost_per_hour: float | None = Field(default=None, ge=0)
     monthly_cost: float | None = Field(default=None, ge=0)
@@ -282,6 +284,7 @@ class EmployeeResponse(APIModel):
     skill_level: str = "intermediate"
     availability_percent: float = 100
     weekly_capacity_hours: float = 40
+    baseline_workload_percent: float = 0
     current_workload_percent: float = 0
     cost_per_hour: float | None = None
     monthly_cost: float | None = None
@@ -910,6 +913,7 @@ class ProcessSummaryResponse(APIModel):
     name: str
     status: str
     risk_level: str | None = None
+    risk_decision: str | None = None
     approval_status: str | None = None
     execution_status: str | None = None
     missing_information: list[str] = Field(default_factory=list)
@@ -1169,6 +1173,21 @@ class ExecutionControlRequest(APIModel):
     run_id: UUID | None = None
 
 
+class ExecutionSteerRequest(APIModel):
+    guidance: str = ""
+    block_tools: list[str] = Field(default_factory=list)
+    unblock_tools: list[str] = Field(default_factory=list)
+    email_guard_enabled: bool | None = None
+    run_id: UUID | None = None
+
+
+class ExecutionSkipRequest(APIModel):
+    tool_name: str
+    reason: str | None = None
+    advance_step: bool = False
+    run_id: UUID | None = None
+
+
 class ExecutionStateResponse(APIModel):
     process_id: UUID
     process_run_id: UUID
@@ -1188,6 +1207,11 @@ class ExecutionStateResponse(APIModel):
     calendar_events: list[dict[str, Any]] = Field(default_factory=list)
     tasks: list[dict[str, Any]] = Field(default_factory=list)
     notifications: list[dict[str, Any]] = Field(default_factory=list)
+    execution_intelligence: dict[str, Any] = Field(default_factory=dict)
+    playbook: list[dict[str, Any]] = Field(default_factory=list)
+    scorecard: dict[str, Any] = Field(default_factory=dict)
+    operator: dict[str, Any] = Field(default_factory=dict)
+    agent_activity: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ExecutionReportResponse(APIModel):
