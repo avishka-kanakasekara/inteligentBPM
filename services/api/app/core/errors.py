@@ -144,17 +144,27 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(Exception)
     async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-        correlation_id = get_correlation_id(request)
-        error_tracker.capture(
-            exc,
-            path=str(request.url.path),
-            correlation_id=correlation_id,
-            trace_id=current_trace_id(),
-        )
-        logger.exception("unhandled_error", error=str(exc), correlation_id=correlation_id)
-        return _error_response(
-            status_code=500,
-            code="INTERNAL_ERROR",
-            message="An unexpected error occurred",
-            correlation_id=correlation_id,
-        )
+        return await unhandled_exception_response(request, exc)
+
+
+async def unhandled_exception_response(request: Request, exc: Exception) -> JSONResponse:
+    """Log the real exception and return the public 500 envelope.
+
+    Starlette installs this handler on ServerErrorMiddleware, which sits outside
+    CORSMiddleware. Callers inside the CORS layer must use this helper so the
+    browser still receives Access-Control-Allow-Origin.
+    """
+    correlation_id = get_correlation_id(request)
+    error_tracker.capture(
+        exc,
+        path=str(request.url.path),
+        correlation_id=correlation_id,
+        trace_id=current_trace_id(),
+    )
+    logger.exception("unhandled_error", error=str(exc), correlation_id=correlation_id)
+    return _error_response(
+        status_code=500,
+        code="INTERNAL_ERROR",
+        message="An unexpected error occurred",
+        correlation_id=correlation_id,
+    )

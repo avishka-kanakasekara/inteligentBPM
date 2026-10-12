@@ -6,6 +6,7 @@ import { LoadingState } from "../../components/ui/LoadingState";
 import { PageHeader } from "../../components/ui/PageHeader";
 import { RetryState } from "../../components/ui/RetryState";
 import { apiClient } from "../../lib/apiClient";
+import { organizationDisplayName } from "../../lib/organizationDisplay";
 import { useOrganization } from "../../providers/OrganizationProvider";
 
 export function DashboardPage() {
@@ -45,7 +46,9 @@ export function DashboardPage() {
       <PageHeader
         eyebrow="Operations"
         title="Dashboard"
-        description={`Live view of process state, risk, approvals, and execution for ${activeOrganization?.name}.`}
+        description={`Live view of process state, risk, approvals, and execution for ${
+          activeOrganization ? organizationDisplayName(activeOrganization) : "this workspace"
+        }.`}
         actions={
           <Link to="/discovery" className="btn btn-primary">
             Start discovery

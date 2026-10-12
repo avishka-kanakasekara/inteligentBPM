@@ -63,6 +63,16 @@ def current_period_key(when: Any | None = None) -> str:
     return f"{dt.year:04d}-{dt.month:02d}"
 
 
+def _verified_plan(organization_id: UUID, stored_plan: str) -> bool:
+    """True when the subscription or organization already has a catalog plan."""
+    if stored_plan in PLAN_CATALOG:
+        return True
+    org = OrganizationRepository().get(organization_id)
+    if org is None:
+        return False
+    return (org.plan_code or "").strip() in PLAN_CATALOG
+
+
 class EntitlementService:
     """Server-side authority for plan features and numeric limits."""
 
@@ -80,9 +90,18 @@ class EntitlementService:
             if sub.get("organization_id") == str(organization_id):
                 return sub
         org = OrganizationRepository().get(organization_id)
-        code = plan_code or (org.plan_code if org else "pro")
-        if code not in PLAN_CATALOG:
+        explicit = (plan_code or "").strip()
+        if explicit in PLAN_CATALOG:
+            code = explicit
+        elif explicit:
+            # Unrecognized explicit selection keeps the previous memory-mode coercion.
             code = "pro"
+        elif org is None:
+            code = "pro"
+        else:
+            org_plan = (org.plan_code or "").strip()
+            # A hosted tenant with no verified plan must not gain a paid plan.
+            code = org_plan if org_plan in PLAN_CATALOG else ""
         now = utcnow()
         sub_id = new_id()
         record = {
@@ -110,14 +129,15 @@ class EntitlementService:
 
     def plan_code_for_org(self, organization_id: UUID) -> str:
         sub = self.get_subscription(organization_id)
+        stored = str(sub.get("plan_code") or "").strip()
         if sub.get("status") == "cancelled":
-            # Cancelled subscriptions fall back to pro after period end.
+            # A verified plan falls back to pro after the paid period ends.
             end = sub.get("current_period_end")
             if end:
                 end_dt = datetime.fromisoformat(str(end).replace("Z", "+00:00"))
-                if utcnow() > end_dt:
+                if utcnow() > end_dt and _verified_plan(organization_id, stored):
                     return "pro"
-        return str(sub.get("plan_code") or "pro")
+        return stored
 
     def list_entitlements(self, plan_code: str) -> list[EntitlementValue]:
         store = get_memory_store()
@@ -188,6 +208,14 @@ class EntitlementService:
         current_usage: float | int,
         increment: float | int = 1,
     ) -> None:
+        plan = self.plan_code_for_org(organization_id)
+        if plan not in PLAN_CATALOG:
+            raise LimitExceeded(
+                f"Plan limit exceeded for {feature_code}",
+                feature_code=feature_code,
+                limit=0,
+                usage=current_usage,
+            )
         limit = self.numeric_limit(organization_id, feature_code)
         if limit is None:
             return
@@ -272,8 +300,12 @@ class EntitlementService:
         else:
             sub["status"] = "cancelled"
             sub["cancelled_at"] = now.isoformat()
-            sub["plan_code"] = "pro"
-            OrganizationRepository().update(organization_id, plan_code="pro")
+            current = str(sub.get("plan_code") or "").strip()
+            if _verified_plan(organization_id, current):
+                sub["plan_code"] = "pro"
+                OrganizationRepository().update(organization_id, plan_code="pro")
+            else:
+                sub["plan_code"] = ""
         sub["updated_at"] = now.isoformat()
         sub["row_version"] = int(sub.get("row_version") or 1) + 1
         sub["metadata"] = {

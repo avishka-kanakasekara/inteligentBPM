@@ -97,11 +97,19 @@ export const SourceRefSchema = z.object({
 });
 export type SourceRef = z.infer<typeof SourceRefSchema>;
 
+export const SubscriptionPlanSchema = z.enum(["pro", "enterprise", "pro_max"]);
+
+/** A catalog plan, or null when the tenant has no verified plan. */
+export const OrganizationPlanSchema = z
+  .union([SubscriptionPlanSchema, z.literal(""), z.null()])
+  .optional()
+  .transform((value) => value || null);
+
 export const OrganizationSchema = z.object({
   id: z.string().uuid(),
   name: z.string(),
   slug: z.string(),
-  plan_code: z.enum(["pro", "enterprise", "pro_max"]),
+  plan_code: OrganizationPlanSchema,
   status: z.string(),
   membership_role: OrgRoleSchema,
 });
@@ -310,7 +318,7 @@ export const OrganizationProfileSchema = z.object({
   id: z.string().uuid(),
   name: z.string(),
   slug: z.string(),
-  plan_code: z.enum(["pro", "enterprise", "pro_max"]),
+  plan_code: OrganizationPlanSchema,
   status: z.string(),
   legal_name: z.string().nullable().optional(),
   trading_name: z.string().nullable().optional(),
@@ -608,7 +616,7 @@ export type BillingPlansResponse = z.infer<typeof BillingPlansResponseSchema>;
 
 export const BillingSubscriptionSnapshotSchema = z.object({
   organization_id: z.string().uuid(),
-  plan_code: z.enum(["pro", "enterprise", "pro_max"]),
+  plan_code: OrganizationPlanSchema,
   subscription: z
     .object({
       id: z.string(),

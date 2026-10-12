@@ -31,6 +31,7 @@ from app.agents.allocation.models import (
 from app.agents.discovery.models import ProcessPlan
 from app.audit import AuditService
 from app.contracts.common import utcnow
+from app.database.employee_compat import manager_links_for_catalog
 from app.database.memory import AllocationResultRecord, EmployeeRecord, get_memory_store, new_id
 from app.llm.client import FakeGeminiClient, GeminiClient, create_gemini_client
 from app.llm.prompt_registry import PromptRegistry
@@ -109,16 +110,19 @@ class AllocationService:
         self.audit = AuditService()
 
     def _load_catalog(self) -> OrgCatalog:
+        employees = self.employees.list_all()
         return OrgCatalog(
             organization_id=self.organization_id,
-            employees=self.employees.list_all(),
+            employees=employees,
             departments=self.departments.list_all(),
             suppliers=self.suppliers.list_all(),
             contacts=self.contacts.list_all(),
             products=self.products.list_all(),
             budgets=self.budgets.list_all(),
             cost_centers=self.cost_centers.list_all(),
-            manager_links=self.manager_links.list_all(),
+            manager_links=manager_links_for_catalog(
+                employees, self.manager_links.list_all()
+            ),
         )
 
     def _org_profile(self) -> OrganizationProfileSnapshot:

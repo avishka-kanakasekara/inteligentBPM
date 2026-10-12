@@ -82,7 +82,14 @@ class BillingWebhookHandler:
         self.entitlements.ensure_subscription(org_id)
 
         if event_type in {"subscription.created", "customer.subscription.created"}:
-            plan = str(payload.get("plan_code") or "pro")
+            raw = payload.get("plan_code")
+            plan = str(raw).strip() if raw is not None else ""
+            if not plan:
+                sub = self.entitlements.get_subscription(org_id)
+                return {
+                    "subscription_id": sub["id"],
+                    "plan_code": str(sub.get("plan_code") or ""),
+                }
             sub = self.entitlements._set_plan(org_id, plan, actor_user_id=None)
             return {"subscription_id": sub["id"], "plan_code": sub["plan_code"]}
 

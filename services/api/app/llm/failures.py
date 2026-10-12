@@ -30,6 +30,9 @@ class LLMFailureClassifier:
     _RATE = re.compile(r"(?i)rate.?limit|429|resource.?exhausted")
     _QUOTA = re.compile(r"(?i)quota|billing|exceeded.*limit")
     _TIMEOUT = re.compile(r"(?i)timeout|timed out|deadline")
+    _AUTH = re.compile(
+        r"(?i)credential|unauthenticated|api key|invalid key|permission denied"
+    )
     _SAFETY = re.compile(r"(?i)safety|blocked|harm.?category|responsible.?ai")
     _UNAVAIL = re.compile(r"(?i)unavailable|not found|404|model.*does not exist|503")
     _JSON = re.compile(r"(?i)json|parse|schema|mime")
@@ -40,6 +43,8 @@ class LLMFailureClassifier:
         text = f"{type(exc).__name__}: {exc}"
         if self._TIMEOUT.search(text):
             return LLMError(text, kind=LLMFailureKind.TIMEOUT, retryable=True)
+        if self._AUTH.search(text):
+            return LLMError(text, kind=LLMFailureKind.PERMANENT, retryable=False)
         if self._RATE.search(text):
             return LLMError(text, kind=LLMFailureKind.RATE_LIMIT, retryable=True)
         if self._QUOTA.search(text):

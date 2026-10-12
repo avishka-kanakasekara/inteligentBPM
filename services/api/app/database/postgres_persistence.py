@@ -2,14 +2,25 @@
 
 from __future__ import annotations
 
+import json
+from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import and_, select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.orm import Session
 
 from app.contracts.common import utcnow
+from app.security.errors import AppError
+from app.database.employee_compat import (
+    HostedRole,
+    employee_model_values,
+    resolve_role_id,
+    role_code_for_tenant,
+)
 from app.database.memory import (
     AllocationResultRecord,
     ApprovalRecord,
@@ -37,9 +48,6 @@ from app.database.models import (
     AppProcessRunModel,
     BudgetModel,
     CostCenterModel,
-    DepartmentModel,
-    DiscoveryMessageModel,
-    DiscoverySessionModel,
     EmployeeManagerLinkModel,
     EmployeeModel,
     ExecutionArtifactModel,
@@ -49,9 +57,12 @@ from app.database.models import (
     ProcessDefinitionModel,
     ProcessVersionModel,
     ProcessWorkflowArtifactModel,
+    RoleModel,
     SupplierContactModel,
     SupplierModel,
     SupplierProductModel,
+    TenantMembershipModel,
+    TenantModel,
 )
 from app.database.sync_pg import sync_session_scope
 from app.domain.enums import ApprovalStatus, MembershipStatus, OrgRole, ProcessRunStatus
@@ -69,6 +80,422 @@ def _as_float(value: Any) -> float | None:
     return float(value)
 
 
+def _is_missing_relation(exc: BaseException) -> bool:
+    """True only for PostgreSQL undefined-table errors."""
+    orig = getattr(exc, "orig", None)
+    sqlstate = getattr(orig, "sqlstate", None) or getattr(orig, "pgcode", None)
+    return sqlstate == "42P01"
+
+
+def _public_relation_exists(session: Session, table_name: str) -> bool:
+    if not table_name.replace("_", "").isalnum():
+        raise ValueError(f"Unexpected table name: {table_name}")
+    found = session.execute(
+        text("select to_regclass(:qualified)"),
+        {"qualified": f"public.{table_name}"},
+    ).scalar_one()
+    return found is not None
+
+
+_DEPARTMENT_OPTIONAL_COLUMNS = (
+    "code",
+    "parent_department_id",
+    "manager_employee_id",
+    "status",
+    "row_version",
+    "created_at",
+    "updated_at",
+)
+
+
+def _department_columns(session: Session) -> set[str]:
+    rows = session.execute(
+        text(
+            "select column_name from information_schema.columns "
+            "where table_schema = 'public' and table_name = 'departments'"
+        )
+    ).all()
+    names: set[str] = set()
+    for row in rows:
+        mapping = row._mapping if hasattr(row, "_mapping") else row
+        name = mapping["column_name"] if "column_name" in mapping else row[0]
+        if isinstance(name, str) and name.replace("_", "").isalnum():
+            names.add(name)
+    return names
+
+
+def department_scope_column(columns: set[str]) -> str:
+    """Physical tenant column on public.departments.
+
+    Hosted departments use tenant_id. The repository schema uses organization_id.
+    """
+    if "tenant_id" in columns:
+        return "tenant_id"
+    if "organization_id" in columns:
+        return "organization_id"
+    raise ValueError("public.departments has no tenant scope column")
+
+
+_ORGANIZATION_CREATE_UNSUPPORTED = (
+    "Creating a workspace is not available for this database. "
+    "No workspace or membership was written."
+)
+_HOSTED_TENANT_COLUMNS = frozenset(
+    {"id", "code", "name", "is_active", "created_at", "updated_at"}
+)
+_HOSTED_MEMBERSHIP_COLUMNS = frozenset(
+    {"id", "tenant_id", "user_id", "role", "status", "created_at", "updated_at"}
+)
+
+
+_DISCOVERY_STORAGE_UNAVAILABLE = (
+    "Discovery chat storage is not available for this database. "
+    "No chat message was written."
+)
+_HOSTED_PROCESS_TYPE = "discovered"
+_SESSION_OPTIONAL_COLUMNS = (
+    "status",
+    "created_by_user_id",
+    "document_ids",
+    "row_version",
+    "created_at",
+    "updated_at",
+)
+_MESSAGE_OPTIONAL_COLUMNS = (
+    "document_ids",
+    "clarifying_questions",
+    "intent",
+    "plan_draft",
+    "source_refs",
+    "suspicious_flags",
+    "created_by_user_id",
+)
+_JSON_COLUMNS = frozenset(
+    {"clarifying_questions", "intent", "plan_draft", "source_refs", "suspicious_flags"}
+)
+
+
+def _discovery_storage_error() -> AppError:
+    return AppError(
+        _DISCOVERY_STORAGE_UNAVAILABLE,
+        code="DISCOVERY_STORAGE_UNAVAILABLE",
+        status_code=503,
+    )
+
+
+def _discovery_identity(columns: set[str]) -> tuple[str, str] | None:
+    """Physical scope and process columns for a discovery table.
+
+    Original tables use organization_id and process_definition_id.
+    Hosted tables use tenant_id and process_id, matching public.processes.
+    """
+    if "organization_id" in columns and "process_definition_id" in columns:
+        return "organization_id", "process_definition_id"
+    if "tenant_id" in columns and "process_id" in columns:
+        return "tenant_id", "process_id"
+    return None
+
+
+def _uuid_list(value: object) -> list[UUID]:
+    if not value:
+        return []
+    result: list[UUID] = []
+    for item in value:  # type: ignore[union-attr]
+        result.append(item if isinstance(item, UUID) else UUID(str(item)))
+    return result
+
+
+def _json_value(value: object) -> str | None:
+    if value is None:
+        return None
+    return json.dumps(value, default=str)
+
+
+def _public_column_names(session: Session, table_name: str) -> set[str]:
+    if not table_name.replace("_", "").isalnum():
+        raise ValueError(f"Unexpected table name: {table_name}")
+    rows = session.execute(
+        text(
+            "select column_name from information_schema.columns "
+            "where table_schema = 'public' and table_name = :table_name"
+        ),
+        {"table_name": table_name},
+    ).all()
+    names: set[str] = set()
+    for row in rows:
+        mapping = row._mapping if hasattr(row, "_mapping") else row
+        name = mapping["column_name"] if "column_name" in mapping else row[0]
+        if isinstance(name, str) and name.replace("_", "").isalnum():
+            names.add(name)
+    return names
+
+
+def _bind_expression(column: str) -> str:
+    if column == "document_ids":
+        return "cast(:document_ids as uuid[])"
+    if column in _JSON_COLUMNS:
+        return f"cast(:{column} as jsonb)"
+    return f":{column}"
+
+
+def _upsert_sql(table: str, columns: list[str], update_columns: list[str]) -> str:
+    if table not in {"discovery_sessions", "discovery_messages", "processes"}:
+        raise ValueError(f"Unexpected table name: {table}")
+    for column in [*columns, *update_columns]:
+        if not column.replace("_", "").isalnum():
+            raise ValueError(f"Unexpected column name: {column}")
+    assignments = ", ".join(f"{column} = excluded.{column}" for column in update_columns)
+    if assignments:
+        conflict = f" on conflict (id) do update set {assignments}"
+    else:
+        conflict = " on conflict (id) do nothing"
+    return (
+        f"insert into public.{table} ({', '.join(columns)}) "
+        f"values ({', '.join(_bind_expression(column) for column in columns)})"
+        f"{conflict}"
+    )
+
+
+def _load_processes(session: Session, store: MemoryStore) -> None:
+    """Load process definitions, or hosted processes scoped by tenant_id."""
+    definition_columns = _public_column_names(session, "process_definitions")
+    if "organization_id" in definition_columns:
+        for row in session.scalars(select(ProcessDefinitionModel)).all():
+            store.processes[row.id] = ProcessDefinitionRecord(
+                id=row.id,
+                organization_id=row.organization_id,
+                name=row.name,
+                description=row.description,
+                status=row.status,
+                created_by_user_id=row.created_by_user_id,
+                created_at=row.created_at,
+                updated_at=row.updated_at,
+            )
+        return
+    columns = _public_column_names(session, "processes")
+    required = {"id", "tenant_id", "name", "status", "created_at", "updated_at"}
+    if not required <= columns:
+        return
+    selected = [
+        "id",
+        "tenant_id as organization_id",
+        "name",
+        "status",
+        "created_at",
+        "updated_at",
+    ]
+    for column in ("description", "created_by"):
+        if column in columns:
+            alias = "created_by_user_id" if column == "created_by" else column
+            selected.append(f"{column} as {alias}" if column == "created_by" else column)
+    rows = session.execute(
+        text(
+            "select "
+            + ", ".join(selected)
+            + " from public.processes where tenant_id is not null"
+        )
+    ).mappings().all()
+    for row in rows:
+        store.processes[row["id"]] = ProcessDefinitionRecord(
+            id=row["id"],
+            organization_id=row["organization_id"],
+            name=row["name"],
+            description=row["description"] if "description" in row else None,
+            status=row["status"],
+            created_by_user_id=row.get("created_by_user_id"),
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
+
+def _discovery_select_sql(table: str, columns: set[str], identity: tuple[str, str]) -> str:
+    scope, process_column = identity
+    selected = [
+        "id",
+        f"{scope} as organization_id",
+        f"{process_column} as process_id",
+    ]
+    if table == "discovery_messages":
+        selected.extend(["session_id", "role", "content", "created_at"])
+        optional = _MESSAGE_OPTIONAL_COLUMNS
+    else:
+        optional = _SESSION_OPTIONAL_COLUMNS
+    selected.extend(column for column in optional if column in columns and column not in selected)
+    return (
+        f"select {', '.join(selected)} from public.{table} "
+        "order by created_at asc, id asc"
+    )
+
+
+def _load_discovery(session: Session, store: MemoryStore) -> None:
+    session_columns = _public_column_names(session, "discovery_sessions")
+    session_identity = _discovery_identity(session_columns)
+    if session_identity is not None and {"created_at", "status"} <= session_columns:
+        rows = session.execute(
+            text(_discovery_select_sql("discovery_sessions", session_columns, session_identity))
+        ).mappings().all()
+        for row in rows:
+            store.discovery_sessions[row["id"]] = DiscoverySessionRecord(
+                id=row["id"],
+                organization_id=row["organization_id"],
+                process_id=row["process_id"],
+                status=row["status"],
+                created_by_user_id=row.get("created_by_user_id"),
+                document_ids=_uuid_list(row.get("document_ids") or []),
+                created_at=row["created_at"],
+                updated_at=row["updated_at"] if "updated_at" in row else row["created_at"],
+            )
+    message_columns = _public_column_names(session, "discovery_messages")
+    message_identity = _discovery_identity(message_columns)
+    if message_identity is None or "created_at" not in message_columns:
+        return
+    rows = session.execute(
+        text(_discovery_select_sql("discovery_messages", message_columns, message_identity))
+    ).mappings().all()
+    for row in rows:
+        store.discovery_messages[row["id"]] = DiscoveryMessageRecord(
+            id=row["id"],
+            organization_id=row["organization_id"],
+            process_id=row["process_id"],
+            session_id=row["session_id"],
+            role=row["role"],
+            content=row["content"],
+            document_ids=_uuid_list(row.get("document_ids") or []),
+            clarifying_questions=_text_list(
+                row["clarifying_questions"] if "clarifying_questions" in row else []
+            ),
+            intent=row["intent"] if "intent" in row else None,
+            plan_draft=row["plan_draft"] if "plan_draft" in row else None,
+            source_refs=list(row.get("source_refs") or []),
+            suspicious_flags=_text_list(
+                row["suspicious_flags"] if "suspicious_flags" in row else []
+            ),
+            created_by_user_id=row.get("created_by_user_id"),
+            created_at=row["created_at"],
+        )
+
+
+def _hosted_workspace_ready(session: Session) -> bool:
+    """True when a workspace can be stored on the verified hosted tenant tables."""
+    if _public_relation_exists(session, "organizations"):
+        return False
+    if not _public_relation_exists(session, "tenants"):
+        return False
+    if not _public_relation_exists(session, "tenant_memberships"):
+        return False
+    tenant_columns = _public_column_names(session, "tenants")
+    membership_columns = _public_column_names(session, "tenant_memberships")
+    return _HOSTED_TENANT_COLUMNS <= tenant_columns and _HOSTED_MEMBERSHIP_COLUMNS <= membership_columns
+
+
+def workspace_create_backend() -> str:
+    """Where a new workspace is stored: memory, organizations, or tenants."""
+    from app.database.memory import postgres_persistence_enabled
+
+    if not postgres_persistence_enabled():
+        return "memory"
+    with sync_session_scope() as session:
+        if _public_relation_exists(session, "organizations"):
+            return "organizations"
+        if _hosted_workspace_ready(session):
+            return "tenants"
+    raise AppError(
+        _ORGANIZATION_CREATE_UNSUPPORTED,
+        code="ORGANIZATION_CREATE_UNSUPPORTED",
+        status_code=422,
+    )
+
+
+def _raise_if_organizations_missing(session: Session) -> None:
+    if _public_relation_exists(session, "organizations"):
+        return
+    raise AppError(
+        _ORGANIZATION_CREATE_UNSUPPORTED,
+        code="ORGANIZATION_CREATE_UNSUPPORTED",
+        status_code=422,
+    )
+
+
+def organization_create_supported() -> bool:
+    """Whether POST /organizations can persist a workspace."""
+    from app.database.memory import postgres_persistence_enabled
+
+    if not postgres_persistence_enabled():
+        return True
+    with sync_session_scope() as session:
+        if _public_relation_exists(session, "organizations"):
+            return True
+        return _hosted_workspace_ready(session)
+
+
+def assert_organization_create_supported() -> None:
+    """Refuse creation when neither workspace schema can store one."""
+    workspace_create_backend()
+
+
+def organization_directory_available() -> bool:
+    """True when the repository organization and membership tables both exist."""
+    with sync_session_scope() as session:
+        return _public_relation_exists(session, "organizations") and _public_relation_exists(
+            session, "organization_memberships"
+        )
+
+
+def _load_present(loader: Callable[[Session], None]) -> None:
+    """Run one catalog load. A missing table leaves that catalog empty."""
+    try:
+        with sync_session_scope() as session:
+            loader(session)
+    except Exception as exc:
+        if _is_missing_relation(exc):
+            return
+        raise
+
+
+def _load_required(loader: Callable[[Session], None]) -> None:
+    with sync_session_scope() as session:
+        loader(session)
+
+
+def organization_record_for_tenant(tenant: TenantModel | UUID) -> OrganizationRecord:
+    """Application identity for a hosted tenant.
+
+    Name and active state come from the verified tenant columns when present.
+    Plan stays blank because public.tenants has no plan column.
+    """
+    now = utcnow()
+    if isinstance(tenant, UUID):
+        tenant_id = tenant
+        name = str(tenant)
+        code = ""
+        is_active = None
+        created_at = now
+        updated_at = now
+    else:
+        tenant_id = tenant.id
+        name = getattr(tenant, "name", None) or str(tenant.id)
+        code = getattr(tenant, "code", None) or ""
+        is_active = getattr(tenant, "is_active", None)
+        created_at = getattr(tenant, "created_at", None) or now
+        updated_at = getattr(tenant, "updated_at", None) or created_at
+    if is_active is True:
+        status = "active"
+    elif is_active is False:
+        status = "inactive"
+    else:
+        status = ""
+    return OrganizationRecord(
+        id=tenant_id,
+        name=str(name),
+        slug=str(code),
+        plan_code="",
+        status=status,
+        row_version=1,
+        created_at=created_at,
+        updated_at=updated_at,
+    )
+
+
 def bootstrap_organization(
     *,
     organization_id: UUID,
@@ -80,6 +507,10 @@ def bootstrap_organization(
 ) -> None:
     now = utcnow()
     with sync_session_scope() as session:
+        if not _public_relation_exists(session, "organizations"):
+            return
+        if not _public_relation_exists(session, "organization_memberships"):
+            return
         session.execute(
             insert(OrganizationModel)
             .values(
@@ -116,7 +547,7 @@ def bootstrap_organization(
 
 
 def hydrate_store(store: MemoryStore) -> None:
-    with sync_session_scope() as session:
+    def load_organizations(session: Session) -> None:
         for row in session.scalars(select(OrganizationModel)).all():
             store.organizations[row.id] = OrganizationRecord(
                 id=row.id,
@@ -135,6 +566,8 @@ def hydrate_store(store: MemoryStore) -> None:
                 tax_registration=row.tax_registration,
                 tax_country_code=row.tax_country_code,
             )
+
+    def load_memberships(session: Session) -> None:
         for row in session.scalars(select(OrganizationMembershipModel)).all():
             store.memberships[row.id] = MembershipRecord(
                 id=row.id,
@@ -145,260 +578,283 @@ def hydrate_store(store: MemoryStore) -> None:
                 created_at=row.created_at,
                 updated_at=row.updated_at,
             )
-        for row in session.scalars(select(DepartmentModel)).all():
-            store.departments[row.id] = DepartmentRecord(
+
+    def load_tenants(session: Session) -> None:
+        for row in session.scalars(select(TenantModel)).all():
+            if row.id in store.organizations:
+                continue
+            store.organizations[row.id] = organization_record_for_tenant(row)
+
+    def load_tenant_memberships(session: Session) -> None:
+        for row in session.scalars(select(TenantMembershipModel)).all():
+            store.memberships[row.id] = MembershipRecord(
                 id=row.id,
-                organization_id=row.organization_id,
-                name=row.name,
-                code=row.code,
-                status=row.status,
-                created_at=row.created_at,
-                updated_at=row.updated_at,
-                parent_department_id=row.parent_department_id,
-                manager_employee_id=row.manager_employee_id,
-            )
-        for row in session.scalars(select(CostCenterModel)).all():
-            store.cost_centers[row.id] = CostCenterRecord(
-                id=row.id,
-                organization_id=row.organization_id,
-                code=row.code,
-                name=row.name,
-                department_id=row.department_id,
-                status=row.status,
+                organization_id=row.tenant_id,
+                user_id=row.user_id,
+                role=OrgRole(row.role),
+                status=MembershipStatus(row.status),
                 created_at=row.created_at,
                 updated_at=row.updated_at,
             )
-        for row in session.scalars(select(EmployeeModel)).all():
-            store.employees[row.id] = _employee_from_row(row)
-        for row in session.scalars(select(EmployeeManagerLinkModel)).all():
-            store.employee_manager_links[row.id] = EmployeeManagerLinkRecord(
-                id=row.id,
-                organization_id=row.organization_id,
-                employee_id=row.employee_id,
-                manager_employee_id=row.manager_employee_id,
-                link_type=row.link_type,
-                status=row.status,
-                created_at=row.created_at,
-                updated_at=row.updated_at,
+
+    def load_employees(session: Session) -> None:
+        employee_rows = session.execute(
+            select(EmployeeModel, RoleModel.code, RoleModel.tenant_id).outerjoin(
+                RoleModel,
+                and_(
+                    RoleModel.id == EmployeeModel.role_id,
+                    RoleModel.tenant_id == EmployeeModel.organization_id,
+                ),
             )
-        for row in session.scalars(select(SupplierModel)).all():
-            store.suppliers[row.id] = _supplier_from_row(row)
-        for row in session.scalars(select(SupplierContactModel)).all():
-            store.supplier_contacts[row.id] = SupplierContactRecord(
-                id=row.id,
-                organization_id=row.organization_id,
-                supplier_id=row.supplier_id,
-                full_name=row.full_name,
-                email=row.email,
-                is_primary=bool(row.is_primary),
-                status=row.status,
-                created_at=row.created_at,
-                updated_at=row.updated_at,
-                phone=row.phone,
-                role_title=row.role_title,
-                allow_duplicate_email=bool(row.allow_duplicate_email),
+        ).all()
+        for row, role_code, role_tenant_id in employee_rows:
+            store.employees[row.id] = _employee_from_row(
+                row,
+                role_code=role_code_for_tenant(row.organization_id, role_tenant_id, role_code),
             )
-        for row in session.scalars(select(SupplierProductModel)).all():
-            store.supplier_products[row.id] = SupplierProductRecord(
-                id=row.id,
-                organization_id=row.organization_id,
-                supplier_id=row.supplier_id,
-                name=row.name,
-                sku=row.sku,
-                unit_price=_as_float(row.unit_price),
-                currency_code=row.currency_code,
-                status=row.status,
-                created_at=row.created_at,
-                updated_at=row.updated_at,
-                description=row.description,
-                unit_of_measure=row.unit_of_measure,
-            )
-        for row in session.scalars(select(BudgetModel)).all():
-            store.budgets[row.id] = BudgetRecord(
-                id=row.id,
-                organization_id=row.organization_id,
-                name=row.name,
-                fiscal_year=row.fiscal_year,
-                amount_total=float(row.amount_total),
-                currency_code=row.currency_code,
-                status=row.status,
-                created_at=row.created_at,
-                updated_at=row.updated_at,
-                department_id=row.department_id,
-                cost_center_id=row.cost_center_id,
-            )
-        for row in session.scalars(select(PolicyModel)).all():
-            store.policies[row.id] = PolicyRecord(
-                id=row.id,
-                organization_id=row.organization_id,
-                code=row.code,
-                title=row.title,
-                status=row.status,
-                created_at=row.created_at,
-                updated_at=row.updated_at,
-                category=row.category,
-            )
-        for row in session.scalars(select(ProcessDefinitionModel)).all():
-            store.processes[row.id] = ProcessDefinitionRecord(
-                id=row.id,
-                organization_id=row.organization_id,
-                name=row.name,
-                description=row.description,
-                status=row.status,
-                created_by_user_id=row.created_by_user_id,
-                created_at=row.created_at,
-                updated_at=row.updated_at,
-            )
-        for row in session.scalars(select(ProcessVersionModel)).all():
-            confirmed_at = None
-            confirmed_by_user_id = None
-            if row.status == "confirmed" and row.is_immutable:
-                confirmed_at = row.updated_at
-            store.process_versions[row.id] = ProcessVersionRecord(
-                id=row.id,
-                organization_id=row.organization_id,
-                process_id=row.process_definition_id,
-                version_number=row.version_number,
-                plan_snapshot=dict(row.plan_snapshot),
-                plan_snapshot_hash=row.plan_snapshot_hash,
-                status=row.status,
-                created_at=row.created_at,
-                updated_at=row.updated_at,
-                confirmed_at=confirmed_at,
-                confirmed_by_user_id=confirmed_by_user_id,
-                is_immutable=row.is_immutable,
-            )
-        for row in session.scalars(select(DiscoverySessionModel)).all():
-            store.discovery_sessions[row.id] = DiscoverySessionRecord(
-                id=row.id,
-                organization_id=row.organization_id,
-                process_id=row.process_definition_id,
-                status=row.status,
-                created_by_user_id=row.created_by_user_id,
-                document_ids=list(row.document_ids or []),
-                created_at=row.created_at,
-                updated_at=row.updated_at,
-            )
-        for row in session.scalars(select(DiscoveryMessageModel)).all():
-            store.discovery_messages[row.id] = DiscoveryMessageRecord(
-                id=row.id,
-                organization_id=row.organization_id,
-                process_id=row.process_definition_id,
-                session_id=row.session_id,
-                role=row.role,
-                content=row.content,
-                document_ids=list(row.document_ids or []),
-                clarifying_questions=list(row.clarifying_questions or []),
-                intent=row.intent,
-                plan_draft=row.plan_draft,
-                source_refs=list(row.source_refs or []),
-                suspicious_flags=list(row.suspicious_flags or []),
-                created_by_user_id=row.created_by_user_id,
-                created_at=row.created_at,
-            )
-        for row in session.scalars(select(ProcessWorkflowArtifactModel)).all():
-            payload = dict(row.payload or {})
-            if row.artifact_type == "allocation":
-                store.allocations[row.id] = AllocationResultRecord(
-                    id=row.id,
-                    organization_id=row.organization_id,
-                    process_id=row.process_definition_id,
-                    process_version_id=row.process_version_id,
-                    status=row.status,
-                    result_snapshot=payload,
-                    created_at=row.created_at,
-                    updated_at=row.updated_at,
-                )
-            elif row.artifact_type == "risk":
-                store.risk_results[row.id] = RiskResultRecord(
-                    id=row.id,
-                    organization_id=row.organization_id,
-                    process_id=row.process_definition_id,
-                    process_version_id=row.process_version_id,
-                    allocation_id=payload.get("allocation_id"),
-                    status=row.status,
-                    result_snapshot=payload,
-                    plan_snapshot_hash=row.plan_snapshot_hash or "",
-                    allocation_snapshot_hash=row.allocation_snapshot_hash,
-                    risk_snapshot_hash=row.risk_snapshot_hash or "",
-                    valid=bool(row.valid),
-                    invalidated_reason=row.invalidated_reason,
-                    created_at=row.created_at,
-                    updated_at=row.updated_at,
-                )
-            elif row.artifact_type == "approval":
-                store.approvals[row.id] = ApprovalRecord(
-                    id=row.id,
-                    organization_id=row.organization_id,
-                    process_run_id=payload.get("process_run_id"),
-                    status=_approval_status(row.status),
-                    snapshot_hash=payload.get("snapshot_hash") or "",
-                    snapshot_payload=payload.get("snapshot_payload") or {},
-                    decided_by_user_id=payload.get("decided_by_user_id"),
-                    decision_note=payload.get("decision_note"),
-                    row_version=row.row_version,
-                    created_at=row.created_at,
-                    updated_at=row.updated_at,
-                    process_id=row.process_definition_id,
-                    process_version_id=row.process_version_id,
-                    risk_result_id=payload.get("risk_result_id"),
-                    plan_snapshot_hash=row.plan_snapshot_hash,
-                    allocation_snapshot_hash=row.allocation_snapshot_hash,
-                    risk_snapshot_hash=row.risk_snapshot_hash,
-                    required_roles=list(payload.get("required_roles") or []),
-                    prohibited_action=bool(payload.get("prohibited_action")),
-                    override_required=bool(payload.get("override_required")),
-                    requested_role=payload.get("requested_role"),
-                    requested_user=payload.get("requested_user"),
-                    decision=payload.get("decision"),
-                    decision_reason=payload.get("decision_reason"),
-                    requested_timestamp=payload.get("requested_timestamp"),
-                    decision_timestamp=payload.get("decision_timestamp"),
-                    expiration_timestamp=payload.get("expiration_timestamp"),
-                    audit_reference=payload.get("audit_reference"),
-                    risk_analysis_id=payload.get("risk_analysis_id"),
-                )
-        for row in session.scalars(select(AppProcessRunModel)).all():
-            store.process_runs[row.id] = ProcessRunRecord(
+
+    _load_present(load_organizations)
+    _load_present(load_memberships)
+    _load_present(load_tenants)
+    _load_present(load_tenant_memberships)
+    _load_required(load_employees)
+    _load_present(lambda session: _hydrate_optional_catalogs(session, store))
+
+
+def _department_select_sql(columns: set[str]) -> str:
+    scope_column = department_scope_column(columns)
+    selected = ["id", f"{scope_column} as organization_id", "name"]
+    for column in _DEPARTMENT_OPTIONAL_COLUMNS:
+        if column in columns:
+            selected.append(column)
+    return "select " + ", ".join(selected) + " from public.departments"
+
+
+def _load_departments(session: Session, store: MemoryStore) -> None:
+    columns = _department_columns(session)
+    rows = session.execute(text(_department_select_sql(columns))).mappings().all()
+    for row in rows:
+        if "status" not in row or "created_at" not in row or "updated_at" not in row:
+            raise ValueError("public.departments is missing status or timestamp columns")
+        store.departments[row["id"]] = DepartmentRecord(
+            id=row["id"],
+            organization_id=row["organization_id"],
+            name=row["name"],
+            code=row["code"] if "code" in row else None,
+            status=row["status"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+            parent_department_id=row["parent_department_id"] if "parent_department_id" in row else None,
+            manager_employee_id=row["manager_employee_id"] if "manager_employee_id" in row else None,
+        )
+
+
+def _hydrate_optional_catalogs(session: Session, store: MemoryStore) -> None:
+    _load_processes(session, store)
+    _load_discovery(session, store)
+    _load_departments(session, store)
+    for row in session.scalars(select(CostCenterModel)).all():
+        store.cost_centers[row.id] = CostCenterRecord(
+            id=row.id,
+            organization_id=row.organization_id,
+            code=row.code,
+            name=row.name,
+            department_id=row.department_id,
+            status=row.status,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+        )
+    for row in session.scalars(select(EmployeeManagerLinkModel)).all():
+        store.employee_manager_links[row.id] = EmployeeManagerLinkRecord(
+            id=row.id,
+            organization_id=row.organization_id,
+            employee_id=row.employee_id,
+            manager_employee_id=row.manager_employee_id,
+            link_type=row.link_type,
+            status=row.status,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+        )
+    for row in session.scalars(select(SupplierModel)).all():
+        store.suppliers[row.id] = _supplier_from_row(row)
+    for row in session.scalars(select(SupplierContactModel)).all():
+        store.supplier_contacts[row.id] = SupplierContactRecord(
+            id=row.id,
+            organization_id=row.organization_id,
+            supplier_id=row.supplier_id,
+            full_name=row.full_name,
+            email=row.email,
+            is_primary=bool(row.is_primary),
+            status=row.status,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+            phone=row.phone,
+            role_title=row.role_title,
+            allow_duplicate_email=bool(row.allow_duplicate_email),
+        )
+    for row in session.scalars(select(SupplierProductModel)).all():
+        store.supplier_products[row.id] = SupplierProductRecord(
+            id=row.id,
+            organization_id=row.organization_id,
+            supplier_id=row.supplier_id,
+            name=row.name,
+            sku=row.sku,
+            unit_price=_as_float(row.unit_price),
+            currency_code=row.currency_code,
+            status=row.status,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+            description=row.description,
+            unit_of_measure=row.unit_of_measure,
+        )
+    for row in session.scalars(select(BudgetModel)).all():
+        store.budgets[row.id] = BudgetRecord(
+            id=row.id,
+            organization_id=row.organization_id,
+            name=row.name,
+            fiscal_year=row.fiscal_year,
+            amount_total=float(row.amount_total),
+            currency_code=row.currency_code,
+            status=row.status,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+            department_id=row.department_id,
+            cost_center_id=row.cost_center_id,
+        )
+    for row in session.scalars(select(PolicyModel)).all():
+        store.policies[row.id] = PolicyRecord(
+            id=row.id,
+            organization_id=row.organization_id,
+            code=row.code,
+            title=row.title,
+            status=row.status,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+            category=row.category,
+        )
+    for row in session.scalars(select(ProcessVersionModel)).all():
+        confirmed_at = None
+        confirmed_by_user_id = None
+        if row.status == "confirmed" and row.is_immutable:
+            confirmed_at = row.updated_at
+        store.process_versions[row.id] = ProcessVersionRecord(
+            id=row.id,
+            organization_id=row.organization_id,
+            process_id=row.process_definition_id,
+            version_number=row.version_number,
+            plan_snapshot=dict(row.plan_snapshot),
+            plan_snapshot_hash=row.plan_snapshot_hash,
+            status=row.status,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+            confirmed_at=confirmed_at,
+            confirmed_by_user_id=confirmed_by_user_id,
+            is_immutable=row.is_immutable,
+        )
+    for row in session.scalars(select(ProcessWorkflowArtifactModel)).all():
+        payload = dict(row.payload or {})
+        if row.artifact_type == "allocation":
+            store.allocations[row.id] = AllocationResultRecord(
                 id=row.id,
                 organization_id=row.organization_id,
                 process_id=row.process_definition_id,
                 process_version_id=row.process_version_id,
-                status=ProcessRunStatus(row.status),
-                initiated_by_user_id=row.initiated_by_user_id,
-                correlation_id=row.correlation_id,
+                status=row.status,
+                result_snapshot=payload,
                 created_at=row.created_at,
                 updated_at=row.updated_at,
-                plan_snapshot_hash=row.plan_snapshot_hash,
-                risk_snapshot_hash=row.risk_snapshot_hash,
-                approval_id=row.approval_id,
-                dry_run=row.dry_run,
-                current_step_index=row.current_step_index,
-                pause_reason=row.pause_reason,
-                allowed_tools=list(row.allowed_tools or []),
             )
-        _ensure_execution_artifacts_table(session)
-        for row in session.scalars(select(ExecutionArtifactModel)).all():
-            payload = dict(row.payload or {})
-            payload.setdefault("id", str(row.id))
-            payload.setdefault("organization_id", str(row.organization_id))
-            if row.process_id:
-                payload.setdefault("process_id", str(row.process_id))
-            if row.process_run_id:
-                payload.setdefault("process_run_id", str(row.process_run_id))
-            kind = row.artifact_kind
-            if kind == "notification":
-                store.notifications[row.id] = payload
-            elif kind == "calendar_event":
-                store.calendar_events[row.id] = payload
-            elif kind == "task":
-                store.tasks[row.id] = payload
-            elif kind == "generated_document":
-                store.generated_documents[row.id] = payload
-            elif kind == "tool_invocation":
-                store.tool_invocations[row.id] = payload
-            elif kind == "email":
-                store.email_outbox[row.id] = payload
+        elif row.artifact_type == "risk":
+            store.risk_results[row.id] = RiskResultRecord(
+                id=row.id,
+                organization_id=row.organization_id,
+                process_id=row.process_definition_id,
+                process_version_id=row.process_version_id,
+                allocation_id=payload.get("allocation_id"),
+                status=row.status,
+                result_snapshot=payload,
+                plan_snapshot_hash=row.plan_snapshot_hash or "",
+                allocation_snapshot_hash=row.allocation_snapshot_hash,
+                risk_snapshot_hash=row.risk_snapshot_hash or "",
+                valid=bool(row.valid),
+                invalidated_reason=row.invalidated_reason,
+                created_at=row.created_at,
+                updated_at=row.updated_at,
+            )
+        elif row.artifact_type == "approval":
+            store.approvals[row.id] = ApprovalRecord(
+                id=row.id,
+                organization_id=row.organization_id,
+                process_run_id=payload.get("process_run_id"),
+                status=_approval_status(row.status),
+                snapshot_hash=payload.get("snapshot_hash") or "",
+                snapshot_payload=payload.get("snapshot_payload") or {},
+                decided_by_user_id=payload.get("decided_by_user_id"),
+                decision_note=payload.get("decision_note"),
+                row_version=row.row_version,
+                created_at=row.created_at,
+                updated_at=row.updated_at,
+                process_id=row.process_definition_id,
+                process_version_id=row.process_version_id,
+                risk_result_id=payload.get("risk_result_id"),
+                plan_snapshot_hash=row.plan_snapshot_hash,
+                allocation_snapshot_hash=row.allocation_snapshot_hash,
+                risk_snapshot_hash=row.risk_snapshot_hash,
+                required_roles=list(payload.get("required_roles") or []),
+                prohibited_action=bool(payload.get("prohibited_action")),
+                override_required=bool(payload.get("override_required")),
+                requested_role=payload.get("requested_role"),
+                requested_user=payload.get("requested_user"),
+                decision=payload.get("decision"),
+                decision_reason=payload.get("decision_reason"),
+                requested_timestamp=payload.get("requested_timestamp"),
+                decision_timestamp=payload.get("decision_timestamp"),
+                expiration_timestamp=payload.get("expiration_timestamp"),
+                audit_reference=payload.get("audit_reference"),
+                risk_analysis_id=payload.get("risk_analysis_id"),
+            )
+    for row in session.scalars(select(AppProcessRunModel)).all():
+        store.process_runs[row.id] = ProcessRunRecord(
+            id=row.id,
+            organization_id=row.organization_id,
+            process_id=row.process_definition_id,
+            process_version_id=row.process_version_id,
+            status=ProcessRunStatus(row.status),
+            initiated_by_user_id=row.initiated_by_user_id,
+            correlation_id=row.correlation_id,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+            plan_snapshot_hash=row.plan_snapshot_hash,
+            risk_snapshot_hash=row.risk_snapshot_hash,
+            approval_id=row.approval_id,
+            dry_run=row.dry_run,
+            current_step_index=row.current_step_index,
+            pause_reason=row.pause_reason,
+            allowed_tools=list(row.allowed_tools or []),
+        )
+    if not _public_relation_exists(session, "app_execution_artifacts"):
+        return
+    for row in session.scalars(select(ExecutionArtifactModel)).all():
+        payload = dict(row.payload or {})
+        payload.setdefault("id", str(row.id))
+        payload.setdefault("organization_id", str(row.organization_id))
+        if row.process_id:
+            payload.setdefault("process_id", str(row.process_id))
+        if row.process_run_id:
+            payload.setdefault("process_run_id", str(row.process_run_id))
+        kind = row.artifact_kind
+        if kind == "notification":
+            store.notifications[row.id] = payload
+        elif kind == "calendar_event":
+            store.calendar_events[row.id] = payload
+        elif kind == "task":
+            store.tasks[row.id] = payload
+        elif kind == "generated_document":
+            store.generated_documents[row.id] = payload
+        elif kind == "tool_invocation":
+            store.tool_invocations[row.id] = payload
+        elif kind == "email":
+            store.email_outbox[row.id] = payload
 
 
 def _ensure_execution_artifacts_table(session: Any) -> None:
@@ -545,8 +1001,68 @@ def persist_email_outbox(store: MemoryStore, record: dict[str, Any]) -> None:
     )
 
 
+def persist_hosted_workspace(record: OrganizationRecord, membership: MembershipRecord) -> None:
+    """Insert a hosted tenant and its owner membership in one transaction."""
+    with sync_session_scope() as session:
+        if not _hosted_workspace_ready(session):
+            raise AppError(
+                _ORGANIZATION_CREATE_UNSUPPORTED,
+                code="ORGANIZATION_CREATE_UNSUPPORTED",
+                status_code=422,
+            )
+        base = record.slug or "workspace"
+        code = base
+        inserted = False
+        for attempt in range(1, 21):
+            try:
+                with session.begin_nested():
+                    session.execute(
+                        text(
+                            "insert into public.tenants "
+                            "(id, code, name, is_active, created_at, updated_at) "
+                            "values (:id, :code, :name, :is_active, :created_at, :updated_at)"
+                        ),
+                        {
+                            "id": record.id,
+                            "code": code,
+                            "name": record.name,
+                            "is_active": True,
+                            "created_at": record.created_at,
+                            "updated_at": record.updated_at,
+                        },
+                    )
+                inserted = True
+                break
+            except IntegrityError:
+                code = f"{base}-{attempt}"
+        if not inserted:
+            raise AppError(
+                "A workspace with this name already exists",
+                code="CONFLICT",
+                status_code=409,
+            )
+        record.slug = code
+        session.execute(
+            text(
+                "insert into public.tenant_memberships "
+                "(id, tenant_id, user_id, role, status, created_at, updated_at) "
+                "values (:id, :tenant_id, :user_id, :role, :status, :created_at, :updated_at)"
+            ),
+            {
+                "id": membership.id,
+                "tenant_id": record.id,
+                "user_id": membership.user_id,
+                "role": membership.role.value,
+                "status": membership.status.value,
+                "created_at": membership.created_at,
+                "updated_at": membership.updated_at,
+            },
+        )
+
+
 def persist_organization(store: MemoryStore, record: OrganizationRecord) -> None:
     with sync_session_scope() as session:
+        _raise_if_organizations_missing(session)
         session.merge(
             OrganizationModel(
                 id=record.id,
@@ -570,6 +1086,21 @@ def persist_organization(store: MemoryStore, record: OrganizationRecord) -> None
 
 def persist_membership(store: MemoryStore, record: MembershipRecord) -> None:
     with sync_session_scope() as session:
+        if _public_relation_exists(session, "tenant_memberships") and not _public_relation_exists(
+            session, "organization_memberships"
+        ):
+            session.merge(
+                TenantMembershipModel(
+                    id=record.id,
+                    tenant_id=record.organization_id,
+                    user_id=record.user_id,
+                    role=record.role.value,
+                    status=record.status.value,
+                    created_at=record.created_at,
+                    updated_at=record.updated_at,
+                )
+            )
+            return
         session.merge(
             OrganizationMembershipModel(
                 id=record.id,
@@ -584,22 +1115,46 @@ def persist_membership(store: MemoryStore, record: MembershipRecord) -> None:
         )
 
 
+def _department_upsert_sql(columns: set[str]) -> str:
+    scope_column = department_scope_column(columns)
+    insert_columns = ["id", scope_column, "name"]
+    for column in _DEPARTMENT_OPTIONAL_COLUMNS:
+        if column in columns:
+            insert_columns.append(column)
+    binds = [":organization_id" if column == scope_column else f":{column}" for column in insert_columns]
+    updates = [
+        f"{column} = excluded.{column}"
+        for column in insert_columns
+        if column not in {"id", "created_at"}
+    ]
+    return (
+        f"insert into public.departments ({', '.join(insert_columns)}) "
+        f"values ({', '.join(binds)}) "
+        f"on conflict (id) do update set {', '.join(updates)}"
+    )
+
+
 def persist_department(store: MemoryStore, record: DepartmentRecord) -> None:
     with sync_session_scope() as session:
-        session.merge(
-            DepartmentModel(
-                id=record.id,
-                organization_id=record.organization_id,
-                name=record.name,
-                code=record.code,
-                parent_department_id=record.parent_department_id,
-                manager_employee_id=record.manager_employee_id,
-                status=record.status,
-                row_version=1,
-                created_at=record.created_at,
-                updated_at=record.updated_at,
-            )
-        )
+        columns = _department_columns(session)
+        values: dict[str, Any] = {
+            "id": record.id,
+            "organization_id": record.organization_id,
+            "name": record.name,
+        }
+        optional_values = {
+            "code": record.code,
+            "parent_department_id": record.parent_department_id,
+            "manager_employee_id": record.manager_employee_id,
+            "status": record.status,
+            "row_version": 1,
+            "created_at": record.created_at,
+            "updated_at": record.updated_at,
+        }
+        for column, value in optional_values.items():
+            if column in columns:
+                values[column] = value
+        session.execute(text(_department_upsert_sql(columns)), values)
 
 
 def persist_cost_center(store: MemoryStore, record: CostCenterRecord) -> None:
@@ -625,34 +1180,27 @@ def _text_list(value: Any) -> list[str]:
     return [str(item) for item in value]
 
 
-def _employee_from_row(row: EmployeeModel) -> EmployeeRecord:
+def _employee_from_row(row: EmployeeModel, *, role_code: str | None = None) -> EmployeeRecord:
     return EmployeeRecord(
         id=row.id,
         organization_id=row.organization_id,
         full_name=row.full_name,
         email=row.email,
-        title=row.title,
+        title=None,
         department_id=row.department_id,
         is_manager=bool(row.is_manager),
         status=row.status,
         created_at=row.created_at,
         updated_at=row.updated_at,
         employee_code=row.employee_code,
-        role_code=row.role_code,
+        role_code=role_code,
         approval_authority_limit=_as_float(row.approval_authority_limit),
-        approval_authority_currency=row.approval_authority_currency or "USD",
         phone=row.phone,
         employment_type=row.employment_type or "full_time",
-        join_date=row.join_date,
         manager_employee_id=row.manager_employee_id,
-        team=row.team,
-        business_unit=row.business_unit,
-        location=row.location,
         reporting_level=int(row.reporting_level or 1),
         primary_skills=_text_list(row.primary_skills),
         secondary_skills=_text_list(row.secondary_skills),
-        certifications=_text_list(row.certifications),
-        years_of_experience=_as_float(row.years_of_experience),
         skill_level=row.skill_level or "intermediate",
         availability_percent=float(
             100 if row.availability_percent is None else row.availability_percent
@@ -669,77 +1217,31 @@ def _employee_from_row(row: EmployeeModel) -> EmployeeRecord:
             row.current_workload_percent if row.current_workload_percent is not None else 0
         ),
         cost_per_hour=_as_float(row.cost_per_hour),
-        monthly_cost=_as_float(row.monthly_cost),
         max_allocation_percent=float(
             row.max_allocation_percent if row.max_allocation_percent is not None else 100
         ),
         approval_tier=row.approval_tier or "none",
-        can_approve_procurement=bool(row.can_approve_procurement),
-        can_approve_budget=bool(row.can_approve_budget),
-        delegation_authority=bool(row.delegation_authority),
-        tasks_completed=row.tasks_completed,
-        avg_task_completion_hours=_as_float(row.avg_task_completion_hours),
-        sla_compliance_percent=_as_float(row.sla_compliance_percent),
-        performance_score=_as_float(row.performance_score),
     )
 
 
 def persist_employee(store: MemoryStore, record: EmployeeRecord) -> None:
-    user_id = (
-        UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
-        if record.email == "owner@demo.bpm.local"
-        else None
-    )
     with sync_session_scope() as session:
-        session.merge(
-            EmployeeModel(
-                id=record.id,
-                organization_id=record.organization_id,
-                user_id=user_id,
-                employee_code=record.employee_code,
-                full_name=record.full_name,
-                email=record.email,
-                title=record.title,
-                department_id=record.department_id,
-                status=record.status,
-                is_manager=record.is_manager,
-                role_code=record.role_code,
-                approval_authority_limit=record.approval_authority_limit,
-                approval_authority_currency=record.approval_authority_currency,
-                phone=record.phone,
-                employment_type=record.employment_type,
-                join_date=record.join_date,
-                manager_employee_id=record.manager_employee_id,
-                team=record.team,
-                business_unit=record.business_unit,
-                location=record.location,
-                reporting_level=record.reporting_level,
-                primary_skills=list(record.primary_skills),
-                secondary_skills=list(record.secondary_skills),
-                certifications=list(record.certifications),
-                years_of_experience=record.years_of_experience,
-                skill_level=record.skill_level,
-                availability_percent=record.availability_percent,
-                weekly_capacity_hours=record.weekly_capacity_hours,
-                baseline_workload_percent=record.baseline_workload_percent,
-                current_workload_percent=record.current_workload_percent,
-                cost_per_hour=record.cost_per_hour,
-                monthly_cost=record.monthly_cost,
-                max_allocation_percent=record.max_allocation_percent,
-                approval_tier=record.approval_tier,
-                can_approve_procurement=record.can_approve_procurement,
-                can_approve_budget=record.can_approve_budget,
-                delegation_authority=record.delegation_authority,
-                tasks_completed=record.tasks_completed,
-                avg_task_completion_hours=record.avg_task_completion_hours,
-                sla_compliance_percent=record.sla_compliance_percent,
-                performance_score=record.performance_score,
-                metadata_json={},
-                row_version=1,
-                created_at=record.created_at,
-                updated_at=record.updated_at,
+        existing = session.get(EmployeeModel, record.id)
+        role_id = existing.role_id if existing is not None else None
+        if record.role_code and record.role_code.strip():
+            rows = session.execute(
+                select(RoleModel.id, RoleModel.tenant_id, RoleModel.code).where(
+                    RoleModel.code == record.role_code
+                )
+            ).all()
+            resolved = resolve_role_id(
+                [HostedRole(id=row.id, tenant_id=row.tenant_id, code=row.code) for row in rows],
+                record.organization_id,
+                record.role_code,
             )
-        )
+            if resolved is not None:
+                role_id = resolved
+        session.merge(EmployeeModel(**employee_model_values(record, role_id=role_id)))
 
 
 def persist_manager_link(store: MemoryStore, record: EmployeeManagerLinkRecord) -> None:
@@ -942,20 +1444,60 @@ def persist_policy(store: MemoryStore, record: PolicyRecord) -> None:
         )
 
 
+def _persist_hosted_process(
+    session: Session,
+    columns: set[str],
+    record: ProcessDefinitionRecord,
+) -> None:
+    values: dict[str, Any] = {
+        "id": record.id,
+        "tenant_id": record.organization_id,
+        "name": record.name,
+        "process_type": _HOSTED_PROCESS_TYPE,
+    }
+    if "description" in columns:
+        values["description"] = record.description
+    if "status" in columns:
+        values["status"] = record.status
+    if "created_at" in columns:
+        values["created_at"] = record.created_at
+    if "updated_at" in columns:
+        values["updated_at"] = record.updated_at
+    update_columns = [
+        column
+        for column in ("name", "description", "status", "updated_at")
+        if column in values and column != "tenant_id"
+    ]
+    session.execute(text(_upsert_sql("processes", list(values), update_columns)), values)
+
+
 def persist_process(store: MemoryStore, record: ProcessDefinitionRecord) -> None:
     with sync_session_scope() as session:
-        session.merge(
-            ProcessDefinitionModel(
-                id=record.id,
-                organization_id=record.organization_id,
-                name=record.name,
-                description=record.description,
-                status=record.status,
-                created_by_user_id=record.created_by_user_id,
-                row_version=1,
-                created_at=record.created_at,
-                updated_at=record.updated_at,
+        definition_columns = _public_column_names(session, "process_definitions")
+        if "organization_id" in definition_columns:
+            session.merge(
+                ProcessDefinitionModel(
+                    id=record.id,
+                    organization_id=record.organization_id,
+                    name=record.name,
+                    description=record.description,
+                    status=record.status,
+                    created_by_user_id=record.created_by_user_id,
+                    row_version=1,
+                    created_at=record.created_at,
+                    updated_at=record.updated_at,
+                )
             )
+            return
+        columns = _public_column_names(session, "processes")
+        required = {"id", "tenant_id", "name", "process_type"}
+        if required <= columns:
+            _persist_hosted_process(session, columns, record)
+            return
+        raise AppError(
+            "Process storage is not available for this database. No process was written.",
+            code="PROCESS_STORAGE_UNAVAILABLE",
+            status_code=503,
         )
 
 
@@ -979,42 +1521,90 @@ def persist_process_version(store: MemoryStore, record: ProcessVersionRecord) ->
         )
 
 
+def _discovery_values(
+    columns: set[str],
+    identity: tuple[str, str],
+    record: DiscoverySessionRecord | DiscoveryMessageRecord,
+) -> dict[str, Any]:
+    scope, process_column = identity
+    values: dict[str, Any] = {
+        "id": record.id,
+        scope: record.organization_id,
+        process_column: record.process_id,
+    }
+    optional: dict[str, Any] = {}
+    if isinstance(record, DiscoveryMessageRecord):
+        values["session_id"] = record.session_id
+        values["role"] = record.role
+        values["content"] = record.content
+        optional = {
+            "document_ids": [str(item) for item in record.document_ids],
+            "clarifying_questions": _json_value(record.clarifying_questions),
+            "intent": _json_value(record.intent),
+            "plan_draft": _json_value(record.plan_draft),
+            "source_refs": _json_value(record.source_refs),
+            "suspicious_flags": _json_value(record.suspicious_flags),
+            "created_by_user_id": record.created_by_user_id,
+            "created_at": record.created_at,
+        }
+    else:
+        optional = {
+            "status": record.status,
+            "created_by_user_id": record.created_by_user_id,
+            "document_ids": [str(item) for item in record.document_ids],
+            "row_version": 1,
+            "created_at": record.created_at,
+            "updated_at": record.updated_at,
+        }
+    for column, value in optional.items():
+        if column in columns:
+            values[column] = value
+    return values
+
+
 def persist_discovery_session(store: MemoryStore, record: DiscoverySessionRecord) -> None:
     with sync_session_scope() as session:
-        session.merge(
-            DiscoverySessionModel(
-                id=record.id,
-                organization_id=record.organization_id,
-                process_definition_id=record.process_id,
-                status=record.status,
-                created_by_user_id=record.created_by_user_id,
-                document_ids=list(record.document_ids),
-                row_version=1,
-                created_at=record.created_at,
-                updated_at=record.updated_at,
-            )
+        columns = _public_column_names(session, "discovery_sessions")
+        identity = _discovery_identity(columns)
+        if identity is None:
+            raise _discovery_storage_error()
+        values = _discovery_values(columns, identity, record)
+        update_columns = [
+            column
+            for column in ("status", "document_ids", "updated_at", "created_by_user_id")
+            if column in values
+        ]
+        session.execute(
+            text(_upsert_sql("discovery_sessions", list(values), update_columns)),
+            values,
         )
 
 
 def persist_discovery_message(store: MemoryStore, record: DiscoveryMessageRecord) -> None:
     with sync_session_scope() as session:
-        session.merge(
-            DiscoveryMessageModel(
-                id=record.id,
-                organization_id=record.organization_id,
-                process_definition_id=record.process_id,
-                session_id=record.session_id,
-                role=record.role,
-                content=record.content,
-                document_ids=list(record.document_ids),
-                clarifying_questions=list(record.clarifying_questions),
-                intent=record.intent,
-                plan_draft=record.plan_draft,
-                source_refs=list(record.source_refs),
-                suspicious_flags=list(record.suspicious_flags),
-                created_by_user_id=record.created_by_user_id,
-                created_at=record.created_at,
+        columns = _public_column_names(session, "discovery_messages")
+        identity = _discovery_identity(columns)
+        required = {"session_id", "role", "content", "created_at"}
+        if identity is None or not required <= columns:
+            raise _discovery_storage_error()
+        values = _discovery_values(columns, identity, record)
+        update_columns = [
+            column
+            for column in (
+                "role",
+                "content",
+                "document_ids",
+                "clarifying_questions",
+                "intent",
+                "plan_draft",
+                "source_refs",
+                "suspicious_flags",
             )
+            if column in values
+        ]
+        session.execute(
+            text(_upsert_sql("discovery_messages", list(values), update_columns)),
+            values,
         )
 
 

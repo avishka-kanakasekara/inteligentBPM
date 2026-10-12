@@ -16,9 +16,14 @@ from app.agents.discovery.models import (
     ProcessStep,
     RiskLevel,
 )
+from app.agents.discovery.service import DiscoveryService
 from app.agents.discovery.validation import ensure_stable_step_ids, validate_process_plan
 from app.domain.enums import OrgRole
-from app.security.errors import ValidationAppError
+from app.llm.client import FakeGeminiClient
+from app.llm.failures import LLMError
+from app.llm.model_registry import ModelRegistry
+from app.llm.types import AgentKind, LLMFailureKind, StructuredGenerationResult
+from app.security.errors import AppError, ValidationAppError
 from tests.conftest import add_membership, make_token
 
 
@@ -405,3 +410,296 @@ def test_prompt_injection_defense(
     )
     with pytest.raises(ValidationAppError):
         validate_process_plan(evil)
+
+
+def _chat(client: TestClient, headers: dict[str, str], process_id: UUID, message: str) -> dict:
+    response = client.post(
+        f"/v1/processes/{process_id}/chat",
+        headers=headers,
+        json={"message": message},
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def test_answered_approver_and_budget_are_not_asked_again(
+    client: TestClient, auth_headers_a: dict[str, str]
+) -> None:
+    process_id = _create_process(client, auth_headers_a)
+    first = _chat(client, auth_headers_a, process_id, "I need a process to buy laptops")
+    assert "required approver" in first["content"].lower()
+    assert "agent 3" in first["content"].lower()
+
+    after_approver = _chat(client, auth_headers_a, process_id, "procurement manager")
+    assert "required approver" not in after_approver["content"].lower()
+    assert "approved budget" in after_approver["content"].lower()
+    assert all(
+        "approver" not in question.lower() for question in after_approver["clarifying_questions"]
+    )
+
+    after_budget = _chat(client, auth_headers_a, process_id, "approved budget is 300000")
+    assert "required approver" not in after_budget["content"].lower()
+    assert "approved budget" not in after_budget["content"].lower()
+    assert after_budget["clarifying_questions"] == []
+    assert "agent 3" in after_budget["content"].lower()
+
+    history = client.get(f"/v1/processes/{process_id}/chat", headers=auth_headers_a)
+    assert history.status_code == 200, history.text
+    contents = [item["content"] for item in history.json()["messages"]]
+    assert contents[0] == "I need a process to buy laptops"
+    assert contents[1] == first["content"]
+    assert contents[2] == "procurement manager"
+    assert contents[3] == after_approver["content"]
+    assert contents[4] == "approved budget is 300000"
+    assert contents[5] == after_budget["content"]
+    assert contents.count(after_approver["content"]) == 1
+
+
+def test_repeated_approver_answer_does_not_restore_the_question(
+    client: TestClient, auth_headers_a: dict[str, str]
+) -> None:
+    process_id = _create_process(client, auth_headers_a)
+    _chat(client, auth_headers_a, process_id, "I need a process to buy laptops")
+    _chat(client, auth_headers_a, process_id, "procurement manager")
+    repeated = _chat(client, auth_headers_a, process_id, "procurement manager")
+    assert "required approver" not in repeated["content"].lower()
+    assert "approved budget" in repeated["content"].lower()
+
+
+def test_gemini_unavailable_keeps_answered_fields(
+    client: TestClient,
+    auth_headers_a: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unavailable(self, **_kwargs: object) -> None:
+        raise LLMError(
+            "No model configured for agent planner.",
+            kind=LLMFailureKind.MODEL_UNAVAILABLE,
+            retryable=False,
+        )
+
+    monkeypatch.setattr(
+        "app.agents.discovery.service.StructuredGenerationService.generate",
+        unavailable,
+    )
+    process_id = _create_process(client, auth_headers_a)
+    _chat(client, auth_headers_a, process_id, "I need a process to buy laptops")
+    answered = _chat(client, auth_headers_a, process_id, "procurement manager")
+    assert "required approver" not in answered["content"].lower()
+    assumptions = answered["intent"]["assumptions"]
+    assert any("planner model is unavailable" in item.lower() for item in assumptions)
+    assert "agent 3" in answered["content"].lower()
+
+
+def test_storage_unavailable_is_not_reported_as_chat_success(
+    client: TestClient,
+    auth_headers_a: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unavailable(self, **_kwargs: object) -> None:
+        raise AppError(
+            "Discovery chat storage is not available. No chat message was written.",
+            code="DISCOVERY_STORAGE_UNAVAILABLE",
+            status_code=503,
+        )
+
+    monkeypatch.setattr(DiscoveryService, "_append_message", unavailable)
+    process_id = _create_process(client, auth_headers_a)
+    response = client.post(
+        f"/v1/processes/{process_id}/chat",
+        headers=auth_headers_a,
+        json={"message": "procurement manager"},
+    )
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "DISCOVERY_STORAGE_UNAVAILABLE"
+    assert "content" not in response.json()
+
+
+def test_gemini_success_response_is_returned(
+    client: TestClient,
+    auth_headers_a: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakeGeminiClient()
+    fake.enqueue_structured(
+        {
+            "reply": "The available documents state annual revenue for 2025 as USD 300000.",
+            "clarifying_questions": [],
+            "intent": {"goal": "Answer the document question"},
+            "reasoning_summary": "Quoted the supplied document context.",
+            "claims_process_safe": False,
+            "bypasses_risk_agent": False,
+            "executes_side_effects": False,
+        }
+    )
+    monkeypatch.setattr("app.agents.discovery.service.create_gemini_client", lambda: fake)
+
+    def resolve(self: ModelRegistry, agent: AgentKind, *, allow_fallback: bool = True) -> str:
+        assert agent == AgentKind.PLANNER
+        return "gemini-2.0-flash-001"
+
+    monkeypatch.setattr(ModelRegistry, "resolve", resolve)
+    process_id = _create_process(client, auth_headers_a)
+    message = "According to the uploaded documents, what is the company's annual revenue for 2025?"
+    body = _chat(client, auth_headers_a, process_id, message)
+    assert len(fake.calls) == 1
+    prompt = fake.calls[0].messages[0].text or ""
+    assert message in prompt
+    assert "USD 300000" in body["content"]
+    assert "captured your process intent" not in body["content"].lower()
+    assert "agent 3" in body["content"].lower()
+
+
+def test_new_question_after_answers_is_not_the_canned_discovery_reply(
+    client: TestClient, auth_headers_a: dict[str, str]
+) -> None:
+    process_id = _create_process(client, auth_headers_a)
+    _chat(client, auth_headers_a, process_id, "I need a process to buy laptops")
+    _chat(client, auth_headers_a, process_id, "procurement manager")
+    _chat(client, auth_headers_a, process_id, "approved budget is 300000")
+    answer = _chat(
+        client,
+        auth_headers_a,
+        process_id,
+        "According to the uploaded documents, what is the company's annual revenue for 2025?",
+    )
+    content = answer["content"].lower()
+    assert "cannot be determined" in content
+    assert "required approver" not in content
+    assert "captured your process intent" not in content
+    assert "enough process information" not in content
+    assert answer["clarifying_questions"] == []
+    assert "300000" not in answer["content"]
+
+
+@pytest.mark.parametrize(
+    ("kind", "message", "status_code", "code"),
+    [
+        (
+            LLMFailureKind.PERMANENT,
+            "invalid api key",
+            503,
+            "PLANNER_CREDENTIALS",
+        ),
+        (
+            LLMFailureKind.RATE_LIMIT,
+            "429 rate limit",
+            429,
+            "PLANNER_RATE_LIMIT",
+        ),
+        (
+            LLMFailureKind.QUOTA,
+            "quota exceeded",
+            429,
+            "PLANNER_QUOTA",
+        ),
+        (
+            LLMFailureKind.TRANSIENT,
+            "planner service unavailable",
+            503,
+            "PLANNER_UNAVAILABLE",
+        ),
+        (
+            LLMFailureKind.INVALID_JSON,
+            "Empty model response",
+            502,
+            "PLANNER_EMPTY_RESPONSE",
+        ),
+    ],
+)
+def test_planner_provider_failures_are_not_success_replies(
+    client: TestClient,
+    auth_headers_a: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+    kind: LLMFailureKind,
+    message: str,
+    status_code: int,
+    code: str,
+) -> None:
+    def fail(self: object, **_kwargs: object) -> StructuredGenerationResult:
+        raise LLMError(message, kind=kind, retryable=False)
+
+    monkeypatch.setattr(
+        "app.agents.discovery.service.StructuredGenerationService.generate",
+        fail,
+    )
+    process_id = _create_process(client, auth_headers_a)
+    response = client.post(
+        f"/v1/processes/{process_id}/chat",
+        headers=auth_headers_a,
+        json={"message": "What is the annual revenue?"},
+    )
+    assert response.status_code == status_code
+    payload = response.json()
+    assert payload["error"]["code"] == code
+    assert "content" not in payload
+    assert "captured your process intent" not in response.text.lower()
+
+
+def _ingest(client: TestClient, headers: dict[str, str], text: str) -> str:
+    response = client.post(
+        "/v1/documents/ingest",
+        headers=headers,
+        json={
+            "title": "Financial note",
+            "file_name": "financials.md",
+            "content_base64": base64.b64encode(text.encode()).decode(),
+            "apply_redaction": True,
+        },
+    )
+    assert response.status_code == 201, response.text
+    return response.json()["id"]
+
+
+def test_document_revenue_is_quoted_only_from_extracted_text(
+    client: TestClient, auth_headers_a: dict[str, str]
+) -> None:
+    document_id = _ingest(
+        client,
+        auth_headers_a,
+        "The company's annual revenue for 2025 is USD 300000.",
+    )
+    process_id = _create_process(client, auth_headers_a)
+    response = client.post(
+        f"/v1/processes/{process_id}/chat",
+        headers=auth_headers_a,
+        json={
+            "message": (
+                "According to the uploaded documents, "
+                "what is the company's annual revenue for 2025?"
+            ),
+            "document_ids": [document_id],
+        },
+    )
+    assert response.status_code == 200, response.text
+    content = response.json()["content"]
+    assert "USD 300000" in content
+    assert "available documents state" in content.lower()
+    assert "999999" not in content
+
+
+def test_document_revenue_for_another_year_is_not_invented(
+    client: TestClient, auth_headers_a: dict[str, str]
+) -> None:
+    document_id = _ingest(
+        client,
+        auth_headers_a,
+        "The company's annual revenue for 2024 is USD 125000.",
+    )
+    process_id = _create_process(client, auth_headers_a)
+    response = client.post(
+        f"/v1/processes/{process_id}/chat",
+        headers=auth_headers_a,
+        json={
+            "message": (
+                "According to the uploaded documents, "
+                "what is the company's annual revenue for 2025?"
+            ),
+            "document_ids": [document_id],
+        },
+    )
+    assert response.status_code == 200, response.text
+    content = response.json()["content"]
+    assert "cannot be determined" in content.lower()
+    assert "125000" not in content
+    assert "300000" not in content
