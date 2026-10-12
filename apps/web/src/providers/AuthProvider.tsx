@@ -13,7 +13,7 @@ import {
   signUpWithPassword,
   updateDisplayName,
 } from "../lib/supabaseAuth";
-import { findMockAccount, saveMockAccount } from "../lib/mockAccounts";
+import { findMockAccount, resolveLocalAccount, saveMockAccount } from "../lib/mockAccounts";
 import { sessionStore } from "../lib/sessionStore";
 
 export type SignUpOutcome =
@@ -44,9 +44,17 @@ type AuthProviderProps = {
 };
 
 function applySession(user: User, accessToken: string, refreshToken: string | null) {
+  const previousUserId = sessionStore.getUser()?.id;
+  if (previousUserId !== user.id) {
+    sessionStore.setOrganizationId(null);
+  }
   sessionStore.setUser(user);
   sessionStore.setToken(accessToken);
   sessionStore.setRefreshToken(refreshToken);
+}
+
+function shareDemoAccount(): boolean {
+  return (import.meta.env.VITE_USE_MOCK_API ?? "true") !== "false";
 }
 
 /**
@@ -78,13 +86,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
         return;
       }
 
-      // Unknown emails stay on the shared demo account. Saved signups keep their own id.
-      const stored = findMockAccount(email);
-      const nextUser: User = stored ?? {
-        id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-        email,
-        displayName: email.split("@")[0] || "User",
-      };
+      const nextUser: User = resolveLocalAccount(email, shareDemoAccount());
       const nextToken = `mock-access-token:${nextUser.id}`;
       applySession(nextUser, nextToken, null);
       setUser(nextUser);
