@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     app_name: str = "intelligent-bpm"
     api_version: str = "0.1.0"
     log_level: str = "INFO"
-    cors_origins: str = "http://localhost:5173"
+    cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
 
     database_url: str | None = Field(default=None)
     redis_url: str | None = Field(default=None)
