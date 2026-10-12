@@ -338,6 +338,12 @@ export const apiClient = {
       body: JSON.stringify(body),
     });
   },
+  updatePolicy(id: string, body: { description: string }): Promise<Policy> {
+    return request(`/policies/${id}`, (data) => PolicySchema.parse(data), {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    });
+  },
   listDocuments(query = ""): Promise<{ items: Document[] }> {
     return request(`/documents${query}`, (data) => DocumentPageSchema.parse(data));
   },
