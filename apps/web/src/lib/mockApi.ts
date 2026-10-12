@@ -700,10 +700,13 @@ const MOCK_BILLING_PLANS = [
 ];
 
 function mockSubscriptionSnapshot(planCode: Organization["plan_code"], orgId: string) {
-  const plan = MOCK_BILLING_PLANS.find((p) => p.plan_code === planCode) ?? MOCK_BILLING_PLANS[0];
+  const plan =
+    planCode == null
+      ? undefined
+      : (MOCK_BILLING_PLANS.find((p) => p.plan_code === planCode) ?? MOCK_BILLING_PLANS[0]);
   const features: Record<string, boolean | null> = {};
   const limits: Record<string, number | null> = {};
-  for (const row of plan.entitlements) {
+  for (const row of plan?.entitlements ?? []) {
     if (row.boolean_value != null) features[row.feature_code] = row.boolean_value;
     if (row.numeric_limit != null) limits[row.feature_code] = row.numeric_limit;
   }
@@ -716,7 +719,7 @@ function mockSubscriptionSnapshot(planCode: Organization["plan_code"], orgId: st
       plan_code: planCode,
       cancel_at_period_end: false,
     },
-    entitlements: plan.entitlements,
+    entitlements: plan?.entitlements ?? [],
     features,
     limits,
   };
