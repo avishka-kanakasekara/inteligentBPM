@@ -34,6 +34,7 @@ export function PoliciesDocumentsPage() {
   const [searchHits, setSearchHits] = useState<DocumentSearchHit[]>([]);
   const [agentContext, setAgentContext] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [reprocessError, setReprocessError] = useState<string | null>(null);
 
   const policiesQuery = useQuery({
     queryKey: ["policies", activeOrganization?.id],
@@ -62,6 +63,15 @@ export function PoliciesDocumentsPage() {
       form.reset();
       void queryClient.invalidateQueries({ queryKey: ["policies"] });
     },
+  });
+
+  const reprocessMutation = useMutation({
+    mutationFn: (id: string) => apiClient.reprocessDocument(id),
+    onSuccess: () => {
+      setReprocessError(null);
+      void queryClient.invalidateQueries({ queryKey: ["documents"] });
+    },
+    onError: (error: Error) => setReprocessError(error.message),
   });
 
   const searchMutation = useMutation({
@@ -211,6 +221,11 @@ export function PoliciesDocumentsPage() {
               {uploadError}
             </p>
           ) : null}
+          {reprocessError ? (
+            <p className="field-error" role="alert">
+              {reprocessError}
+            </p>
+          ) : null}
 
           {documentsQuery.isLoading ? <LoadingState label="Loading documents…" /> : null}
           {documentsQuery.data?.items.length === 0 ? (
@@ -226,6 +241,7 @@ export function PoliciesDocumentsPage() {
                   <th scope="col">Status</th>
                   <th scope="col">Chunks</th>
                   <th scope="col">Flags</th>
+                  {canUpload ? <th scope="col">Actions</th> : null}
                 </tr>
               </thead>
               <tbody>
@@ -248,6 +264,18 @@ export function PoliciesDocumentsPage() {
                     </td>
                     <td>{d.chunk_count ?? 0}</td>
                     <td>{(d.suspicious_flags ?? []).join(", ") || "—"}</td>
+                    {canUpload ? (
+                      <td>
+                        <button
+                          type="button"
+                          className="btn-secondary"
+                          disabled={reprocessMutation.isPending}
+                          onClick={() => reprocessMutation.mutate(d.id)}
+                        >
+                          Reprocess
+                        </button>
+                      </td>
+                    ) : null}
                   </tr>
                 ))}
               </tbody>
