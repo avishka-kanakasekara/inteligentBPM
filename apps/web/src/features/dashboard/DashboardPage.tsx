@@ -1,7 +1,8 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { ProcessStatusBadge, RiskBadge } from "../../components/process/StatusBadges";
+import { ProcessActivity } from "../../components/process/ProcessActivity";
+import { RiskBadge } from "../../components/process/StatusBadges";
 import { LoadingState } from "../../components/ui/LoadingState";
 import { PageHeader } from "../../components/ui/PageHeader";
 import { RetryState } from "../../components/ui/RetryState";
@@ -125,11 +126,7 @@ export function DashboardPage() {
                   <div>
                     <strong>{process.name}</strong>
                     <div className="badge-row" style={{ marginTop: "0.35rem" }}>
-                      {(process.risk_decision || "").toUpperCase() === "BLOCKED" ? (
-                        <span className="status-pill tone-danger">Blocked</span>
-                      ) : (
-                        <ProcessStatusBadge status={process.status} />
-                      )}
+                      <ProcessActivity process={process} />
                       <RiskBadge level={process.risk_level} />
                     </div>
                   </div>
@@ -162,7 +159,7 @@ export function DashboardPage() {
                       <tr key={process.id}>
                         <td>{process.name}</td>
                         <td>
-                          <ProcessStatusBadge status={process.status} />
+                          <ProcessActivity process={process} />
                         </td>
                         <td>
                           <RiskBadge level={process.risk_level} />
@@ -206,7 +203,7 @@ export function DashboardPage() {
                 recent.slice(0, 5).map((process) => (
                   <li key={process.id}>
                     <span>{process.name}</span>
-                    <ProcessStatusBadge status={process.status} />
+                    <ProcessActivity process={process} />
                   </li>
                 ))
               )}
