@@ -22,6 +22,7 @@ from app.middleware.hardening import (
     RequestSizeLimitMiddleware,
 )
 from app.middleware.security_headers import SecurityHeadersMiddleware
+from app.middleware.unhandled import UnhandledExceptionMiddleware
 from app.observability.metrics import metrics
 from app.security.rate_limit import api_rate_limiter, login_abuse_limiter, login_abuse_protector
 
@@ -59,17 +60,23 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         default_membership_id = UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
         now = datetime.now(timezone.utc)
 
+        directory_available = True
         if settings.persistence_mode == "postgres" and settings.database_url:
-            from app.database.postgres_persistence import bootstrap_organization
-
-            bootstrap_organization(
-                organization_id=default_org_id,
-                user_id=default_user_id,
-                name="Acme Corporation",
-                slug="acme-corporation",
-                plan_code="enterprise",
-                membership_id=default_membership_id,
+            from app.database.postgres_persistence import (
+                bootstrap_organization,
+                organization_directory_available,
             )
+
+            directory_available = organization_directory_available()
+            if directory_available:
+                bootstrap_organization(
+                    organization_id=default_org_id,
+                    user_id=default_user_id,
+                    name="Acme Corporation",
+                    slug="acme-corporation",
+                    plan_code="enterprise",
+                    membership_id=default_membership_id,
+                )
             initialize_postgres_persistence()
         else:
             with store.lock:
@@ -101,13 +108,14 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
             from app.database.seed_company import seed_sample_company
 
             seed_plan_entitlements(store)
-            EntitlementService().ensure_subscription(default_org_id, plan_code="enterprise")
-            seed_sample_company(
-                store,
-                organization_id=default_org_id,
-                user_id=default_user_id,
-                include_process=True,
-            )
+            if directory_available:
+                EntitlementService().ensure_subscription(default_org_id, plan_code="enterprise")
+                seed_sample_company(
+                    store,
+                    organization_id=default_org_id,
+                    user_id=default_user_id,
+                    include_process=True,
+                )
         except Exception:
             pass
 
@@ -152,6 +160,9 @@ def create_app() -> FastAPI:
     application.add_middleware(ObservabilityMiddleware)
     application.add_middleware(CorrelationIdMiddleware)
     application.add_middleware(EntitlementLimitMiddleware)
+    # Inside CORS so unhandled 500s still receive Access-Control-Allow-Origin.
+    # Starlette's Exception handler runs on ServerErrorMiddleware, outside CORS.
+    application.add_middleware(UnhandledExceptionMiddleware)
     # CORSMiddleware added last so it is the outermost middleware on requests and responses
     application.add_middleware(
         CORSMiddleware,
@@ -170,6 +181,7 @@ def create_app() -> FastAPI:
         ],
         expose_headers=[
             "X-Correlation-Id",
+            "X-Organization-Create-Supported",
             "X-Trace-Id",
             "traceparent",
             "Retry-After",
