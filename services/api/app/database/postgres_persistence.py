@@ -1257,6 +1257,27 @@ def enable_postgres_persistence(store: MemoryStore) -> None:
     store.email_outbox = _PersistedDict(store, persist_email_outbox, store.email_outbox)
 
 
+def delete_policy_persistence(organization_id: UUID, policy_id: UUID) -> None:
+    """Remove a policy after releasing its current version pointer."""
+    params = {"organization_id": organization_id, "policy_id": policy_id}
+    statements = (
+        """
+        UPDATE public.policies
+        SET current_version_id = NULL
+        WHERE id = :policy_id
+          AND organization_id = :organization_id
+        """,
+        """
+        DELETE FROM public.policies
+        WHERE id = :policy_id
+          AND organization_id = :organization_id
+        """,
+    )
+    with sync_session_scope() as session:
+        for statement in statements:
+            session.execute(text(statement), params)
+
+
 def delete_process_persistence(organization_id: UUID, process_id: UUID) -> None:
     """Remove a process and rows that block deleting the definition."""
     params = {"organization_id": organization_id, "process_id": process_id}

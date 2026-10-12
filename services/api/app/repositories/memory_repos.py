@@ -791,6 +791,16 @@ class PolicyRepository(TenantRepository):
         self.store.policies[record.id] = record
         return record
 
+    def delete(self, policy_id: UUID) -> PolicyRecord:
+        record = self.get(policy_id)
+        from app.config import get_settings
+        from app.database.postgres_persistence import delete_policy_persistence
+
+        if get_settings().persistence_mode == "postgres":
+            delete_policy_persistence(self.organization_id, policy_id)
+        self.store.policies.pop(policy_id, None)
+        return record
+
 
 class DocumentRepository(TenantRepository):
     def list_all(self) -> list[DocumentRecord]:
