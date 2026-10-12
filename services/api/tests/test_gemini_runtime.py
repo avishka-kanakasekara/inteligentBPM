@@ -181,6 +181,9 @@ def test_failure_classifier_kinds() -> None:
     assert clf.classify(RuntimeError("model unavailable 503")).kind == (
         LLMFailureKind.MODEL_UNAVAILABLE
     )
+    credentials = RuntimeError("DefaultCredentialsError: credentials were not found")
+    assert clf.classify(credentials).kind == LLMFailureKind.PERMANENT
+    assert clf.classify(RuntimeError("invalid api key")).kind == LLMFailureKind.PERMANENT
 
 
 def test_circuit_breaker_opens() -> None:
