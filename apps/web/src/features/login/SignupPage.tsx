@@ -55,14 +55,14 @@ export function SignupPage() {
         subtitle="Confirm your email, then sign in to choose or create an organization."
         footer={
           <p>
-            Ready? <Link to="/login?confirmed=1">Sign in</Link>
+            Ready after confirming? <Link to="/login?confirm=1">Sign in</Link>
           </p>
         }
       >
         <p className="auth-banner" role="status">
           {confirmMessage}
         </p>
-        <Link className="auth-submit auth-link-btn" to="/login?confirmed=1">
+        <Link className="auth-submit auth-link-btn" to="/login?confirm=1">
           Go to sign in
         </Link>
       </AuthShell>
