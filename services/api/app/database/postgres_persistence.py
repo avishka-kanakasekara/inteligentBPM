@@ -115,7 +115,23 @@ def bootstrap_organization(
         )
 
 
+def ensure_policy_detail_columns() -> None:
+    """Keep policy text available on databases created before description was stored."""
+    with sync_session_scope() as session:
+        session.execute(text("alter table public.policies add column if not exists description text"))
+        session.execute(
+            text("alter table public.policies add column if not exists owner_employee_id uuid")
+        )
+        session.execute(
+            text(
+                "alter table public.policies add column if not exists metadata jsonb "
+                "not null default '{}'::jsonb"
+            )
+        )
+
+
 def hydrate_store(store: MemoryStore) -> None:
+    ensure_policy_detail_columns()
     with sync_session_scope() as session:
         for row in session.scalars(select(OrganizationModel)).all():
             store.organizations[row.id] = OrganizationRecord(
@@ -237,6 +253,9 @@ def hydrate_store(store: MemoryStore) -> None:
                 created_at=row.created_at,
                 updated_at=row.updated_at,
                 category=row.category,
+                description=row.description,
+                owner_employee_id=row.owner_employee_id,
+                metadata=dict(row.metadata_json or {}),
             )
         for row in session.scalars(select(ProcessDefinitionModel)).all():
             store.processes[row.id] = ProcessDefinitionRecord(
@@ -935,6 +954,9 @@ def persist_policy(store: MemoryStore, record: PolicyRecord) -> None:
                 code=record.code,
                 title=record.title,
                 category=record.category,
+                description=record.description,
+                owner_employee_id=record.owner_employee_id,
+                metadata_json=record.metadata or {},
                 status=record.status,
                 row_version=1,
                 created_at=record.created_at,
