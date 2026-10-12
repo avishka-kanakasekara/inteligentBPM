@@ -563,8 +563,11 @@ def ensure_policy_detail_columns() -> None:
 
 def hydrate_store(store: MemoryStore) -> None:
     def load_organizations(session: Session) -> None:
+<<<<<<< HEAD
+=======
     ensure_policy_detail_columns()
     with sync_session_scope() as session:
+>>>>>>> main
         for row in session.scalars(select(OrganizationModel)).all():
             store.organizations[row.id] = OrganizationRecord(
                 id=row.id,
@@ -622,6 +625,8 @@ def hydrate_store(store: MemoryStore) -> None:
                     RoleModel.id == EmployeeModel.role_id,
                     RoleModel.tenant_id == EmployeeModel.organization_id,
                 ),
+<<<<<<< HEAD
+=======
         for row in session.scalars(select(PolicyModel)).all():
             store.policies[row.id] = PolicyRecord(
                 id=row.id,
@@ -635,6 +640,7 @@ def hydrate_store(store: MemoryStore) -> None:
                 description=row.description,
                 owner_employee_id=row.owner_employee_id,
                 metadata=dict(row.metadata_json or {}),
+>>>>>>> main
             )
         ).all()
         for row, role_code, role_tenant_id in employee_rows:
@@ -793,6 +799,58 @@ def _hydrate_optional_catalogs(session: Session, store: MemoryStore) -> None:
                 result_snapshot=payload,
                 created_at=row.created_at,
                 updated_at=row.updated_at,
+<<<<<<< HEAD
+            )
+        elif row.artifact_type == "risk":
+            store.risk_results[row.id] = RiskResultRecord(
+                id=row.id,
+                organization_id=row.organization_id,
+                process_id=row.process_definition_id,
+                process_version_id=row.process_version_id,
+                allocation_id=payload.get("allocation_id"),
+                status=row.status,
+                result_snapshot=payload,
+                plan_snapshot_hash=row.plan_snapshot_hash or "",
+                allocation_snapshot_hash=row.allocation_snapshot_hash,
+                risk_snapshot_hash=row.risk_snapshot_hash or "",
+                valid=bool(row.valid),
+                invalidated_reason=row.invalidated_reason,
+                created_at=row.created_at,
+                updated_at=row.updated_at,
+            )
+        elif row.artifact_type == "approval":
+            store.approvals[row.id] = ApprovalRecord(
+                id=row.id,
+                organization_id=row.organization_id,
+                process_run_id=payload.get("process_run_id"),
+                status=_approval_status(row.status),
+                snapshot_hash=payload.get("snapshot_hash") or "",
+                snapshot_payload=payload.get("snapshot_payload") or {},
+                decided_by_user_id=payload.get("decided_by_user_id"),
+                decision_note=payload.get("decision_note"),
+                row_version=row.row_version,
+                created_at=row.created_at,
+                updated_at=row.updated_at,
+                process_id=row.process_definition_id,
+                process_version_id=row.process_version_id,
+                risk_result_id=payload.get("risk_result_id"),
+                plan_snapshot_hash=row.plan_snapshot_hash,
+                allocation_snapshot_hash=row.allocation_snapshot_hash,
+                risk_snapshot_hash=row.risk_snapshot_hash,
+                required_roles=list(payload.get("required_roles") or []),
+                prohibited_action=bool(payload.get("prohibited_action")),
+                override_required=bool(payload.get("override_required")),
+                requested_role=payload.get("requested_role"),
+                requested_user=payload.get("requested_user"),
+                decision=payload.get("decision"),
+                decision_reason=payload.get("decision_reason"),
+                requested_timestamp=payload.get("requested_timestamp"),
+                decision_timestamp=payload.get("decision_timestamp"),
+                expiration_timestamp=payload.get("expiration_timestamp"),
+                audit_reference=payload.get("audit_reference"),
+                risk_analysis_id=payload.get("risk_analysis_id"),
+            )
+=======
             )
         elif row.artifact_type == "risk":
             store.risk_results[row.id] = RiskResultRecord(
@@ -849,6 +907,7 @@ def _hydrate_optional_catalogs(session: Session, store: MemoryStore) -> None:
                 allowed_tools=list(row.allowed_tools or []),
                 metadata=dict(row.metadata_json or {}),
             )
+>>>>>>> main
     for row in session.scalars(select(AppProcessRunModel)).all():
         store.process_runs[row.id] = ProcessRunRecord(
             id=row.id,
