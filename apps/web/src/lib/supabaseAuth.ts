@@ -58,14 +58,21 @@ function parseSessionPayload(payload: unknown, fallbackEmail?: string): Supabase
   };
 }
 
+export const EMAIL_CONFIRMATION_REQUIRED =
+  "Confirm your email before signing in. Use the link from your inbox, then sign in with the same password.";
+
 function authErrorMessage(payload: unknown, fallback: string): string {
   if (typeof payload !== "object" || payload === null) return fallback;
   const data = payload as {
+    error_code?: string;
     error_description?: string;
     msg?: string;
     message?: string;
     error?: string;
   };
+  if (data.error_code === "email_not_confirmed" || data.msg === "Email not confirmed") {
+    return EMAIL_CONFIRMATION_REQUIRED;
+  }
   return data.error_description || data.msg || data.message || data.error || fallback;
 }
 
@@ -121,6 +128,22 @@ export async function signUpWithPassword(input: {
   const payload: unknown = await response.json().catch(() => null);
   if (!response.ok) {
     throw new Error(authErrorMessage(payload, "Could not create your account"));
+  }
+
+  const identities =
+    typeof payload === "object" &&
+    payload !== null &&
+    "identities" in payload &&
+    Array.isArray((payload as { identities?: unknown }).identities)
+      ? (payload as { identities: unknown[] }).identities
+      : null;
+  if (identities?.length === 0) {
+    return {
+      kind: "confirm_email",
+      email: input.email,
+      message:
+        "If this email can be registered, a confirmation message will arrive shortly. Sign in only after you confirm it, using the same password.",
+    };
   }
 
   if (
