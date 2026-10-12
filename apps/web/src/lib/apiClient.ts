@@ -348,6 +348,15 @@ export const apiClient = {
       body: JSON.stringify(body),
     });
   },
+  updatePolicy(id: string, body: { description: string }): Promise<Policy> {
+    return request(`/policies/${id}`, (data) => PolicySchema.parse(data), {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    });
+  },
+  deletePolicy(id: string): Promise<void> {
+    return request(`/policies/${id}`, () => undefined, { method: "DELETE" });
+  },
   listDocuments(query = ""): Promise<{ items: Document[] }> {
     return request(`/documents${query}`, (data) => DocumentPageSchema.parse(data));
   },
@@ -406,6 +415,9 @@ export const apiClient = {
     return request(`/processes/summaries/${id}`, (data) =>
       ProcessSummarySchema.parse(data),
     );
+  },
+  deleteProcess(processId: string): Promise<void> {
+    return request(`/processes/${processId}`, () => undefined, { method: "DELETE" });
   },
   createProcess(data: { name: string; description?: string }): Promise<ProcessSummary> {
     return request("/processes", (res) => ProcessSummarySchema.parse(res), {
@@ -563,6 +575,35 @@ export const apiClient = {
   },
   getExecution(processId: string): Promise<any> {
     return request(`/processes/${processId}/execution`, (res) => res);
+  },
+  steerExecution(
+    processId: string,
+    body: {
+      guidance?: string;
+      block_tools?: string[];
+      unblock_tools?: string[];
+      email_guard_enabled?: boolean;
+      run_id?: string;
+    },
+  ): Promise<any> {
+    return request(`/processes/${processId}/execution/steer`, (res) => res, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  },
+  skipExecutionProposal(
+    processId: string,
+    body: {
+      tool_name: string;
+      reason?: string;
+      advance_step?: boolean;
+      run_id?: string;
+    },
+  ): Promise<any> {
+    return request(`/processes/${processId}/execution/skip`, (res) => res, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
   },
   completeProcess(processId: string): Promise<ProcessSummary> {
     return request(`/processes/${processId}/complete`, (data) =>

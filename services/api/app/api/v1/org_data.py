@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Request, Response
 
 from app.auth.deps import (
     OrganizationContext,
@@ -658,3 +658,18 @@ async def deactivate_policy(
         correlation_id=get_correlation_id(request),
     )
     return PolicyResponse.model_validate(record, from_attributes=True)
+
+
+@router.delete("/policies/{policy_id}", status_code=204)
+async def delete_policy(
+    policy_id: UUID,
+    request: Request,
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    org: Annotated[OrganizationContext, Depends(require_permission(perm.POLICIES_MANAGE))],
+) -> Response:
+    PolicyService(org.organization_id).delete(
+        policy_id,
+        actor_user_id=user.id,
+        correlation_id=get_correlation_id(request),
+    )
+    return Response(status_code=204)

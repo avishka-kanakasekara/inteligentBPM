@@ -1,42 +1,71 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { ProcessStatusBadge, RiskBadge } from "../../components/process/StatusBadges";
+import { ProcessActivity } from "../../components/process/ProcessActivity";
+import { RiskBadge } from "../../components/process/StatusBadges";
 import { LoadingState } from "../../components/ui/LoadingState";
 import { PageHeader } from "../../components/ui/PageHeader";
 import { RetryState } from "../../components/ui/RetryState";
 import { apiClient } from "../../lib/apiClient";
 import { organizationDisplayName } from "../../lib/organizationDisplay";
 import { useOrganization } from "../../providers/OrganizationProvider";
+import { selectDashboardMetrics } from "./dashboardMetrics";
 
 export function DashboardPage() {
   const { activeOrganization } = useOrganization();
-  const query = useQuery({
+  const enabled = Boolean(activeOrganization?.id);
+
+  const processesQuery = useQuery({
     queryKey: ["processes", activeOrganization?.id],
     queryFn: () => apiClient.listProcesses(),
-    enabled: Boolean(activeOrganization),
+    enabled,
+  });
+  const runsQuery = useQuery({
+    queryKey: ["dashboard", "process-runs", activeOrganization?.id],
+    queryFn: () => apiClient.listProcessRuns({ limit: 100 }),
+    enabled,
+  });
+  const approvalsQuery = useQuery({
+    queryKey: ["dashboard", "approvals", activeOrganization?.id],
+    queryFn: () => apiClient.listApprovals(),
+    enabled,
   });
 
-  const processes = query.data ?? [];
-  const metrics = useMemo(() => {
-    const activeRuns = processes.filter((p) => ["executing", "paused"].includes(p.status)).length;
-    const pendingApprovals = processes.filter((p) => p.status === "awaiting_approval").length;
-    const completed = processes.filter((p) => p.status === "completed").length;
-    const blocked = processes.filter((p) => p.status === "blocked" || p.status === "failed").length;
-    return { activeRuns, pendingApprovals, completed, blocked };
-  }, [processes]);
-
-  const attention = processes.filter((p) =>
-    ["awaiting_approval", "blocked", "failed", "paused"].includes(p.status),
+  const processes = processesQuery.data ?? [];
+  const metrics = useMemo(
+    () =>
+      selectDashboardMetrics(
+        processes,
+        runsQuery.data?.items ?? [],
+        approvalsQuery.data ?? [],
+      ),
+    [approvalsQuery.data, processes, runsQuery.data],
   );
+  const attentionIds = new Set([...metrics.blockedProcessIds, ...metrics.pendingProcessIds]);
+  const attention = processes.filter((process) => attentionIds.has(process.id));
   const recent = [...processes].slice(0, 6);
+  const failed =
+    !enabled || processesQuery.isPending || runsQuery.isPending || approvalsQuery.isPending
+      ? null
+      : processesQuery.isError || runsQuery.isError || approvalsQuery.isError;
 
-  if (query.isLoading) return <LoadingState label="Loading dashboard…" />;
-  if (query.isError) {
+  if (!enabled || processesQuery.isPending || runsQuery.isPending || approvalsQuery.isPending) {
+    return <LoadingState label="Loading dashboard…" />;
+  }
+  if (failed) {
+    const message =
+      (processesQuery.error as Error | null)?.message ||
+      (runsQuery.error as Error | null)?.message ||
+      (approvalsQuery.error as Error | null)?.message ||
+      "Could not load the dashboard.";
     return (
       <RetryState
-        message={query.error.message}
-        onRetry={() => void query.refetch()}
+        message={message}
+        onRetry={() => {
+          void processesQuery.refetch();
+          void runsQuery.refetch();
+          void approvalsQuery.refetch();
+        }}
       />
     );
   }
@@ -65,7 +94,7 @@ export function DashboardPage() {
         <div>
           <dt className="kpi-label">Active runs</dt>
           <dd className="kpi-value">{metrics.activeRuns}</dd>
-          <p className="kpi-hint">Executing or paused</p>
+          <p className="kpi-hint">Open runs</p>
         </div>
         <div>
           <dt className="kpi-label">Pending approvals</dt>
@@ -80,7 +109,7 @@ export function DashboardPage() {
         <div>
           <dt className="kpi-label">Blocked</dt>
           <dd className="kpi-value">{metrics.blocked}</dd>
-          <p className="kpi-hint">Needs attention</p>
+          <p className="kpi-hint">Risk blocked or failed</p>
         </div>
       </dl>
 
@@ -100,12 +129,15 @@ export function DashboardPage() {
                   <div>
                     <strong>{process.name}</strong>
                     <div className="badge-row" style={{ marginTop: "0.35rem" }}>
-                      <ProcessStatusBadge status={process.status} />
+                      <ProcessActivity process={process} />
                       <RiskBadge level={process.risk_level} />
                     </div>
                   </div>
-                  <Link to={process.status === "awaiting_approval" ? "/approvals" : "/runs"} className="linkish">
-                    {process.status === "awaiting_approval" ? "Review approval" : "Open run"}
+                  <Link
+                    to={metrics.pendingProcessIds.includes(process.id) ? "/approvals" : "/runs"}
+                    className="linkish"
+                  >
+                    {metrics.pendingProcessIds.includes(process.id) ? "Review approval" : "Open run"}
                   </Link>
                 </li>
               ))}
@@ -130,7 +162,7 @@ export function DashboardPage() {
                       <tr key={process.id}>
                         <td>{process.name}</td>
                         <td>
-                          <ProcessStatusBadge status={process.status} />
+                          <ProcessActivity process={process} />
                         </td>
                         <td>
                           <RiskBadge level={process.risk_level} />
@@ -174,7 +206,7 @@ export function DashboardPage() {
                 recent.slice(0, 5).map((process) => (
                   <li key={process.id}>
                     <span>{process.name}</span>
-                    <ProcessStatusBadge status={process.status} />
+                    <ProcessActivity process={process} />
                   </li>
                 ))
               )}

@@ -506,6 +506,7 @@ class ProcessRunRecord:
     current_step_index: int = 0
     pause_reason: str | None = None
     allowed_tools: list[str] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

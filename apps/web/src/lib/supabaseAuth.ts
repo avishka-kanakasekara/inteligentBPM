@@ -163,6 +163,29 @@ export async function signUpWithPassword(input: {
   };
 }
 
+/** Persist the name shown in the app. Email and user id stay with the auth provider. */
+export async function updateDisplayName(accessToken: string, displayName: string): Promise<void> {
+  if (!supabaseConfigured()) {
+    throw new Error("Supabase is not configured in the frontend environment");
+  }
+
+  const url = `${import.meta.env.VITE_SUPABASE_URL}/auth/v1/user`;
+  const response = await fetch(url, {
+    method: "PUT",
+    headers: {
+      apikey: import.meta.env.VITE_SUPABASE_ANON_KEY!,
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ data: { full_name: displayName } }),
+  });
+
+  const payload: unknown = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(authErrorMessage(payload, "Could not update your display name"));
+  }
+}
+
 /** Exchange a refresh token for a new access token. */
 export async function refreshSession(refreshToken: string): Promise<SupabaseSession> {
   if (!supabaseConfigured()) {

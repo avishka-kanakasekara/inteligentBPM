@@ -267,6 +267,50 @@ export function SuppliersPage() {
     enabled: Boolean(activeOrganization?.id),
   });
 
+  const [catalogNotice, setCatalogNotice] = useState<string | null>(null);
+  const [contactDraft, setContactDraft] = useState({
+    supplier_id: "",
+    full_name: "",
+    email: "",
+  });
+  const [productDraft, setProductDraft] = useState({
+    supplier_id: "",
+    name: "",
+    sku: "",
+    unit_price: "",
+  });
+
+  const contactMutation = useMutation({
+    mutationFn: () =>
+      apiClient.createSupplierContact({
+        supplier_id: contactDraft.supplier_id,
+        full_name: contactDraft.full_name.trim(),
+        email: contactDraft.email.trim() || null,
+      }),
+    onSuccess: () => {
+      setContactDraft((draft) => ({ ...draft, full_name: "", email: "" }));
+      setCatalogNotice("Contact created");
+      void queryClient.invalidateQueries({ queryKey: ["supplier-contacts"] });
+    },
+    onError: (error: Error) => setCatalogNotice(error.message),
+  });
+
+  const productMutation = useMutation({
+    mutationFn: () =>
+      apiClient.createSupplierProduct({
+        supplier_id: productDraft.supplier_id,
+        name: productDraft.name.trim(),
+        sku: productDraft.sku.trim() || null,
+        unit_price: productDraft.unit_price ? Number(productDraft.unit_price) : null,
+      }),
+    onSuccess: () => {
+      setProductDraft((draft) => ({ ...draft, name: "", sku: "", unit_price: "" }));
+      setCatalogNotice("Product created");
+      void queryClient.invalidateQueries({ queryKey: ["supplier-products"] });
+    },
+    onError: (error: Error) => setCatalogNotice(error.message),
+  });
+
   const form = useForm<SupplierForm>({
     resolver: zodResolver(supplierSchema),
     defaultValues: EMPTY_FORM,
@@ -345,6 +389,7 @@ export function SuppliersPage() {
         ) : null}
 
         {suppliersQuery.data && suppliersQuery.data.items.length > 0 ? (
+          <div className="table-wrap">
           <table className="data-table">
             <thead>
               <tr>
@@ -404,6 +449,7 @@ export function SuppliersPage() {
               ))}
             </tbody>
           </table>
+          </div>
         ) : null}
 
         {canManage ? (
@@ -701,9 +747,65 @@ export function SuppliersPage() {
           </>
         ) : null}
 
+        {catalogNotice ? (
+          <p className="inline-notice" role="status">
+            {catalogNotice}
+          </p>
+        ) : null}
         <div className="split-panels" style={{ marginTop: "1.5rem" }}>
           <article>
             <h2>Contacts</h2>
+            {canManage ? (
+              <form
+                className="mgmt-form"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  if (!contactDraft.supplier_id || !contactDraft.full_name.trim()) return;
+                  contactMutation.mutate();
+                }}
+              >
+                <label>
+                  Supplier
+                  <select
+                    value={contactDraft.supplier_id}
+                    onChange={(event) =>
+                      setContactDraft((draft) => ({ ...draft, supplier_id: event.target.value }))
+                    }
+                    required
+                  >
+                    <option value="">Select</option>
+                    {(suppliersQuery.data?.items ?? []).map((supplier) => (
+                      <option key={supplier.id} value={supplier.id}>
+                        {supplier.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Name
+                  <input
+                    value={contactDraft.full_name}
+                    onChange={(event) =>
+                      setContactDraft((draft) => ({ ...draft, full_name: event.target.value }))
+                    }
+                    required
+                  />
+                </label>
+                <label>
+                  Email
+                  <input
+                    type="email"
+                    value={contactDraft.email}
+                    onChange={(event) =>
+                      setContactDraft((draft) => ({ ...draft, email: event.target.value }))
+                    }
+                  />
+                </label>
+                <button type="submit" disabled={contactMutation.isPending}>
+                  {contactMutation.isPending ? "Adding…" : "Add contact"}
+                </button>
+              </form>
+            ) : null}
             <ul className="simple-list">
               {(contactsQuery.data?.items ?? []).map((contact) => (
                 <li key={contact.id}>
@@ -714,6 +816,68 @@ export function SuppliersPage() {
           </article>
           <article>
             <h2>Products</h2>
+            {canManage ? (
+              <form
+                className="mgmt-form"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  if (!productDraft.supplier_id || !productDraft.name.trim()) return;
+                  productMutation.mutate();
+                }}
+              >
+                <label>
+                  Supplier
+                  <select
+                    value={productDraft.supplier_id}
+                    onChange={(event) =>
+                      setProductDraft((draft) => ({ ...draft, supplier_id: event.target.value }))
+                    }
+                    required
+                  >
+                    <option value="">Select</option>
+                    {(suppliersQuery.data?.items ?? []).map((supplier) => (
+                      <option key={supplier.id} value={supplier.id}>
+                        {supplier.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Name
+                  <input
+                    value={productDraft.name}
+                    onChange={(event) =>
+                      setProductDraft((draft) => ({ ...draft, name: event.target.value }))
+                    }
+                    required
+                  />
+                </label>
+                <label>
+                  SKU
+                  <input
+                    value={productDraft.sku}
+                    onChange={(event) =>
+                      setProductDraft((draft) => ({ ...draft, sku: event.target.value }))
+                    }
+                  />
+                </label>
+                <label>
+                  Unit price
+                  <input
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    value={productDraft.unit_price}
+                    onChange={(event) =>
+                      setProductDraft((draft) => ({ ...draft, unit_price: event.target.value }))
+                    }
+                  />
+                </label>
+                <button type="submit" disabled={productMutation.isPending}>
+                  {productMutation.isPending ? "Adding…" : "Add product"}
+                </button>
+              </form>
+            ) : null}
             <ul className="simple-list">
               {(productsQuery.data?.items ?? []).map((product) => (
                 <li key={product.id}>

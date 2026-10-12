@@ -11,7 +11,9 @@ import {
   isSupabaseAuthEnabled,
   signInWithPassword,
   signUpWithPassword,
+  updateDisplayName,
 } from "../lib/supabaseAuth";
+import { findMockAccount, resolveLocalAccount, saveMockAccount } from "../lib/mockAccounts";
 import { sessionStore } from "../lib/sessionStore";
 
 export type SignUpOutcome =
@@ -30,6 +32,7 @@ type AuthContextValue = {
     fullName: string;
   }) => Promise<SignUpOutcome>;
   signOut: () => Promise<void>;
+  updateProfile: (input: { displayName: string }) => Promise<void>;
   authError: string | null;
   clearAuthError: () => void;
 };
@@ -41,9 +44,17 @@ type AuthProviderProps = {
 };
 
 function applySession(user: User, accessToken: string, refreshToken: string | null) {
+  const previousUserId = sessionStore.getUser()?.id;
+  if (previousUserId !== user.id) {
+    sessionStore.setOrganizationId(null);
+  }
   sessionStore.setUser(user);
   sessionStore.setToken(accessToken);
   sessionStore.setRefreshToken(refreshToken);
+}
+
+function shareDemoAccount(): boolean {
+  return (import.meta.env.VITE_USE_MOCK_API ?? "true") !== "false";
 }
 
 /**
@@ -75,12 +86,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
         return;
       }
 
-      // Mock-api / local demo — pairs with backend mock-access-token bypass
-      const nextUser: User = {
-        id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-        email,
-        displayName: email.split("@")[0] || "User",
-      };
+      const nextUser: User = resolveLocalAccount(email, shareDemoAccount());
       const nextToken = `mock-access-token:${nextUser.id}`;
       applySession(nextUser, nextToken, null);
       setUser(nextUser);
@@ -120,12 +126,13 @@ export function AuthProvider({ children }: AuthProviderProps) {
           return { kind: "signed_in" as const };
         }
 
-        // Mock mode — create a local session immediately
-        const nextUser: User = {
+        const existing = findMockAccount(input.email);
+        const nextUser: User = existing ?? {
           id: crypto.randomUUID(),
           email: input.email,
           displayName: input.fullName || input.email.split("@")[0] || "User",
         };
+        saveMockAccount(nextUser);
         const nextToken = `mock-access-token:${nextUser.id}`;
         applySession(nextUser, nextToken, null);
         setUser(nextUser);
@@ -140,6 +147,27 @@ export function AuthProvider({ children }: AuthProviderProps) {
       }
     },
     [],
+  );
+
+  const updateProfile = useCallback(
+    async (input: { displayName: string }) => {
+      const displayName = input.displayName.trim().replace(/\s+/g, " ");
+      if (!user || !token) throw new Error("Sign in before updating your profile");
+      if (!displayName) throw new Error("Display name is required");
+      if (displayName.length > 80) throw new Error("Display name must be 80 characters or fewer");
+
+      const mockSession = token.startsWith("mock-access-token:");
+      if (isSupabaseAuthEnabled() && !mockSession) {
+        await updateDisplayName(token, displayName);
+      } else {
+        saveMockAccount({ id: user.id, email: user.email, displayName });
+      }
+
+      const nextUser: User = { ...user, displayName };
+      sessionStore.setUser(nextUser);
+      setUser(nextUser);
+    },
+    [token, user],
   );
 
   const signOut = useCallback(async () => {
@@ -163,10 +191,11 @@ export function AuthProvider({ children }: AuthProviderProps) {
       signIn,
       signUp,
       signOut,
+      updateProfile,
       authError,
       clearAuthError,
     }),
-    [user, token, isLoading, signIn, signUp, signOut, authError, clearAuthError],
+    [user, token, isLoading, signIn, signUp, signOut, updateProfile, authError, clearAuthError],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

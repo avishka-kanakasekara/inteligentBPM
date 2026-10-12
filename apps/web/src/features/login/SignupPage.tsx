@@ -52,7 +52,7 @@ export function SignupPage() {
     return (
       <AuthShell
         title="Check your inbox"
-        subtitle="Confirm your email, then sign in to choose or create an organization."
+        subtitle="Confirm your email, then sign in."
         footer={
           <p>
             Ready after confirming? <Link to="/login?confirm=1">Sign in</Link>
@@ -72,7 +72,7 @@ export function SignupPage() {
   return (
     <AuthShell
       title="Create account"
-      subtitle="Join Intelligent BPM to discover processes, allocate resources, and execute with approval gates."
+      subtitle="Create your account to get started."
       footer={
         <p>
           Already have an account? <Link to="/login">Sign in</Link>

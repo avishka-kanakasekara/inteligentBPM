@@ -27,13 +27,7 @@ const ACTIVE_PROCESS_STATUSES = new Set([
   "failed",
 ]);
 
-const ACTIVE_RUN_STATUSES = new Set([
-  "executing",
-  "paused",
-  "blocked",
-  "awaiting_approval",
-  "approved",
-]);
+const FINISHED_RUN_STATUSES = new Set(["completed", "cancelled", "failed", "rejected"]);
 
 const TERMINAL_STATUSES = new Set(["completed", "cancelled"]);
 
@@ -90,7 +84,7 @@ export function ActiveRunsPage() {
     const runs = runsQuery.data?.items ?? [];
     const byProcess = new Map<string, ProcessRun>();
     for (const run of runs) {
-      if (!ACTIVE_RUN_STATUSES.has(run.status)) continue;
+      if (FINISHED_RUN_STATUSES.has(run.status)) continue;
       const existing = byProcess.get(run.process_id);
       if (
         !existing ||

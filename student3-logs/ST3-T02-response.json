@@ -1,0 +1,19 @@
+{
+  "http_status": 200,
+  "body": {
+    "id": "01a27033-b4ad-4875-bd4d-c4d8f8b1fc4c",
+    "organization_id": "76ec608f-37a4-45fa-bb58-fb81c0710720",
+    "process_id": "ce232166-4786-4480-a8ce-bc6de2b4c949",
+    "session_id": "19c899e2-3605-4bd1-9e79-3bff7572bd50",
+    "role": "assistant",
+    "content": "I cannot fulfill this request. Creating a procurement process that includes statements about an employee being \"incompetent, lazy, useless, and should be publicly humiliated for making mistakes\" is unethical, unprofessional, and likely violates company policy and labor laws regarding harassment and employee treatment. My purpose is to assist with legitimate business processes, not to facilitate harmful or discriminatory actions.",
+    "document_ids": [],
+    "clarifying_questions": [],
+    "intent": null,
+    "plan_draft": null,
+    "source_refs": [],
+    "suspicious_flags": [],
+    "created_by_user_id": null,
+    "created_at": "2026-10-07T10:13:21.811326Z"
+  }
+}

@@ -93,6 +93,17 @@ ROLE_PERMISSIONS: dict[OrgRole, frozenset[str]] = {
             EXECUTION_RUN,
         }
     ),
+    OrgRole.APPROVER: frozenset(
+        {
+            DIRECTORY_READ,
+            SUPPLIERS_READ,
+            POLICIES_READ,
+            DOCUMENTS_READ,
+            PROCESSES_READ,
+            APPROVALS_DECIDE,
+            APPROVALS_READ,
+        }
+    ),
     OrgRole.EMPLOYEE: frozenset(
         {
             DIRECTORY_READ,

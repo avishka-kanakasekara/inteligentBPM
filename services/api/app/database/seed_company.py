@@ -64,6 +64,29 @@ def _put(mapping: dict[UUID, Any], record_id: UUID, record: Any) -> None:
     mapping[record_id] = record
 
 
+_POLICY_TEXT = {
+    POL_PROC: (
+        "Purchases above $2,500 require manager approval. "
+        "Purchases above $10,000 require dual quotes from approved suppliers. "
+        "Purchases above $25,000 require finance approval."
+    ),
+    POL_FIN: "Employees may only approve spend within their authority limit.",
+    POL_SEC: "New IT vendors require a completed security questionnaire before approval.",
+}
+
+
+def _ensure_policy_details(store: MemoryStore) -> None:
+    """Write the sample policy text when an existing row was saved without it."""
+    now = utcnow()
+    for policy_id, description in _POLICY_TEXT.items():
+        record = store.policies.get(policy_id)
+        if record is None or (record.description and record.description.strip()):
+            continue
+        record.description = description
+        record.updated_at = now
+        store.policies[policy_id] = record
+
+
 def _ensure_kanaka_supplier(
     store: MemoryStore,
     *,
@@ -142,6 +165,7 @@ def seed_sample_company(
 
     # Idempotent: if company directory already present, still ensure Kanaka demo supplier
     if EMP_OWNER in store.employees and SUP_NORTHWIND in store.suppliers:
+        _ensure_policy_details(store)
         if include_process:
             _ensure_kanaka_supplier(store, organization_id=organization_id, now=now)
             seed_demo_processes(store, organization_id=organization_id, user_id=user_id)
