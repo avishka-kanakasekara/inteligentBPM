@@ -1854,6 +1854,12 @@ input[type="checkbox"] {
   display: grid;
   gap: 1rem;
 }
+.settings-section-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+}
 .settings-section-head h3 {
   margin: 0 0 0.25rem;
   font-size: 1.1rem;
@@ -1899,6 +1905,26 @@ input[type="checkbox"] {
   color: var(--color-text-primary);
   font-weight: 600;
   word-break: break-word;
+}
+.settings-field-edit {
+  display: grid;
+  gap: 0.55rem;
+  justify-items: end;
+  width: 100%;
+}
+.settings-field-edit input {
+  width: min(100%, 280px);
+  text-align: left;
+}
+.settings-edit-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  justify-content: flex-end;
+}
+.settings-field-edit .field-error {
+  margin: 0;
+  text-align: right;
 }
 .settings-org-card {
   display: flex;
@@ -2457,6 +2483,17 @@ input[type="checkbox"] {
   }
   .settings-field-value {
     justify-self: start;
+    text-align: left;
+  }
+  .settings-section-head {
+    flex-direction: column;
+  }
+  .settings-field-edit,
+  .settings-edit-actions {
+    justify-items: start;
+    justify-content: flex-start;
+  }
+  .settings-field-edit .field-error {
     text-align: left;
   }
   .settings-org-card,

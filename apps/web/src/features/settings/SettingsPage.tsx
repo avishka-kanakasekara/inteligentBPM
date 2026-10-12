@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import { PageHeader } from "../../components/ui/PageHeader";
 import { useOrganization } from "../../providers/OrganizationProvider";
@@ -29,9 +29,13 @@ function planLabel(code?: string | null) {
 }
 
 export function SettingsPage() {
-  const { user, signOut } = useAuth();
+  const { user, signOut, updateProfile } = useAuth();
   const { activeOrganization, organizations } = useOrganization();
   const [tab, setTab] = useState<SettingsTab>("profile");
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState("");
+  const [profileError, setProfileError] = useState<string | null>(null);
+  const [savingProfile, setSavingProfile] = useState(false);
   const [prefs, setPrefs] = useState({
     processUpdates: true,
     approvalRequests: true,
@@ -53,6 +57,27 @@ export function SettingsPage() {
   function flash(message: string) {
     setSavedFlash(message);
     window.setTimeout(() => setSavedFlash(null), 2200);
+  }
+
+  function beginNameEdit() {
+    setNameDraft(user?.displayName ?? "");
+    setProfileError(null);
+    setEditingName(true);
+  }
+
+  async function saveName(event: FormEvent) {
+    event.preventDefault();
+    setSavingProfile(true);
+    setProfileError(null);
+    try {
+      await updateProfile({ displayName: nameDraft });
+      setEditingName(false);
+      flash("Display name updated");
+    } catch (error) {
+      setProfileError(error instanceof Error ? error.message : "Could not update your profile");
+    } finally {
+      setSavingProfile(false);
+    }
   }
 
   return (
@@ -125,28 +150,79 @@ export function SettingsPage() {
               <header className="settings-section-head">
                 <div>
                   <h3>Profile</h3>
-                  <p>Account details from the authenticated session.</p>
+                  <p>Change the name shown in this workspace. Sign-in details stay fixed.</p>
                 </div>
+                {editingName ? null : (
+                  <button type="button" className="btn-secondary" onClick={beginNameEdit}>
+                    Edit profile
+                  </button>
+                )}
               </header>
               <div className="settings-field-list">
-                <div className="settings-field">
-                  <div>
-                    <span className="settings-field-label">Display name</span>
-                    <span className="settings-field-hint">Shown across approvals and audit events</span>
+                {editingName ? (
+                  <form className="settings-field" onSubmit={(event) => void saveName(event)}>
+                    <div>
+                      <label className="settings-field-label" htmlFor="display-name">
+                        Display name
+                      </label>
+                      <span className="settings-field-hint">
+                        Shown in the sidebar, approvals, and audit events
+                      </span>
+                    </div>
+                    <div className="settings-field-edit">
+                      <input
+                        id="display-name"
+                        value={nameDraft}
+                        onChange={(event) => setNameDraft(event.target.value)}
+                        maxLength={80}
+                        required
+                        autoFocus
+                      />
+                      <div className="settings-edit-actions">
+                        <button type="submit" disabled={savingProfile || !nameDraft.trim()}>
+                          {savingProfile ? "Saving…" : "Save"}
+                        </button>
+                        <button
+                          type="button"
+                          className="ghost-btn"
+                          disabled={savingProfile}
+                          onClick={() => {
+                            setEditingName(false);
+                            setProfileError(null);
+                          }}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                      {profileError ? (
+                        <p className="field-error" role="alert">
+                          {profileError}
+                        </p>
+                      ) : null}
+                    </div>
+                  </form>
+                ) : (
+                  <div className="settings-field">
+                    <div>
+                      <span className="settings-field-label">Display name</span>
+                      <span className="settings-field-hint">
+                        Shown in the sidebar, approvals, and audit events
+                      </span>
+                    </div>
+                    <div className="settings-field-value">{user?.displayName || "—"}</div>
                   </div>
-                  <div className="settings-field-value">{user?.displayName || "—"}</div>
-                </div>
+                )}
                 <div className="settings-field">
                   <div>
                     <span className="settings-field-label">Email</span>
-                    <span className="settings-field-hint">Sign-in identity</span>
+                    <span className="settings-field-hint">Sign-in identity. This cannot be changed here.</span>
                   </div>
                   <div className="settings-field-value">{user?.email || "—"}</div>
                 </div>
                 <div className="settings-field">
                   <div>
                     <span className="settings-field-label">User ID</span>
-                    <span className="settings-field-hint">Internal identifier</span>
+                    <span className="settings-field-hint">Assigned by the system</span>
                   </div>
                   <div className="settings-field-value">
                     <code className="mono-chip">{user?.id ?? "—"}</code>
