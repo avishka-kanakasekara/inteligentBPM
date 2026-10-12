@@ -7,6 +7,7 @@ import { PageHeader } from "../../components/ui/PageHeader";
 import { RetryState } from "../../components/ui/RetryState";
 import { RequirePermission } from "../../components/RouteGuards";
 import { apiClient } from "../../lib/apiClient";
+import { organizationDisplayName } from "../../lib/organizationDisplay";
 import { PERMISSIONS } from "../../lib/permissions";
 import { useOrganization } from "../../providers/OrganizationProvider";
 
@@ -48,9 +49,9 @@ function usagePercent(used: number, limit: number | null | undefined) {
   return Math.min(100, Math.round((used / limit) * 100));
 }
 
-function planRank(code: string | undefined) {
-  const idx = PLAN_ORDER.indexOf((code as (typeof PLAN_ORDER)[number]) ?? "pro");
-  return idx < 0 ? 0 : idx;
+function planRank(code: string | null | undefined) {
+  if (!code) return -1;
+  return PLAN_ORDER.indexOf(code as (typeof PLAN_ORDER)[number]);
 }
 
 export function BillingPage() {
@@ -160,7 +161,7 @@ export function BillingPage() {
                 <p className="eyebrow">Current subscription</p>
                 <h2>{plans.find((p) => p.plan_code === currentPlan)?.display_name ?? currentPlan}</h2>
                 <p className="lede" style={{ marginBottom: 0 }}>
-                  {activeOrganization?.name} · status{" "}
+                  {activeOrganization ? organizationDisplayName(activeOrganization) : "Workspace"} · status{" "}
                   <strong>{subscriptionQuery.data?.subscription?.status ?? "active"}</strong>
                   {subscriptionQuery.data?.subscription?.cancel_at_period_end
                     ? " · cancels at period end"
