@@ -344,6 +344,9 @@ export const apiClient = {
       body: JSON.stringify(body),
     });
   },
+  deletePolicy(id: string): Promise<void> {
+    return request(`/policies/${id}`, () => undefined, { method: "DELETE" });
+  },
   listDocuments(query = ""): Promise<{ items: Document[] }> {
     return request(`/documents${query}`, (data) => DocumentPageSchema.parse(data));
   },

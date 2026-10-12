@@ -50,6 +50,7 @@ export function PoliciesDocumentsPage() {
   const [selectedPolicyId, setSelectedPolicyId] = useState<string | null>(null);
   const [detailDraft, setDetailDraft] = useState("");
   const [detailError, setDetailError] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const policiesQuery = useQuery({
     queryKey: ["policies", activeOrganization?.id],
@@ -89,6 +90,24 @@ export function PoliciesDocumentsPage() {
     },
     onError: (error: Error) => setDetailError(error.message),
   });
+
+  const deleteMutation = useMutation({
+    mutationFn: (policy: Policy) => apiClient.deletePolicy(policy.id),
+    onSuccess: (_result, policy) => {
+      setDeleteError(null);
+      if (selectedPolicyId === policy.id) setSelectedPolicyId(null);
+      void queryClient.invalidateQueries({ queryKey: ["policies"] });
+    },
+    onError: (error: Error) => setDeleteError(error.message),
+  });
+
+  function requestDelete(policy: Policy) {
+    const confirmed = window.confirm(
+      `Delete ${policy.code} — ${policy.title}? This removes the policy.`,
+    );
+    if (!confirmed) return;
+    deleteMutation.mutate(policy);
+  }
 
   const reprocessMutation = useMutation({
     mutationFn: (id: string) => apiClient.reprocessDocument(id),
@@ -166,6 +185,12 @@ export function PoliciesDocumentsPage() {
           <EmptyState title="No policies" description="Create policy metadata to begin." />
         ) : null}
 
+        {deleteError ? (
+          <p className="field-error" role="alert">
+            {deleteError}
+          </p>
+        ) : null}
+
         {policiesQuery.data && policiesQuery.data.items.length > 0 ? (
           <>
             <div className="table-wrap">
@@ -207,6 +232,16 @@ export function PoliciesDocumentsPage() {
                             >
                               {open ? "Hide" : "View"}
                             </button>
+                            {canManagePolicies ? (
+                              <button
+                                type="button"
+                                className="btn-danger"
+                                disabled={deleteMutation.isPending}
+                                onClick={() => requestDelete(policy)}
+                              >
+                                Delete
+                              </button>
+                            ) : null}
                           </div>
                           {text ? <span className="policy-preview">{text}</span> : null}
                         </td>
@@ -228,9 +263,21 @@ export function PoliciesDocumentsPage() {
                         <p className="eyebrow">{policy.code}</p>
                         <h2 id="policy-detail-title">{policy.title}</h2>
                       </div>
-                      <button type="button" className="ghost-btn" onClick={() => setSelectedPolicyId(null)}>
-                        Close
-                      </button>
+                      <div className="policy-row-actions">
+                        {canManagePolicies ? (
+                          <button
+                            type="button"
+                            className="btn-danger"
+                            disabled={deleteMutation.isPending}
+                            onClick={() => requestDelete(policy)}
+                          >
+                            {deleteMutation.isPending ? "Deleting…" : "Delete"}
+                          </button>
+                        ) : null}
+                        <button type="button" className="ghost-btn" onClick={() => setSelectedPolicyId(null)}>
+                          Close
+                        </button>
+                      </div>
                     </div>
                     <p className="badge-row">
                       <span className="status-pill">{policy.status}</span>

@@ -1173,6 +1173,11 @@ export const mockApi = {
       policies = [...policies, created];
       return created as T;
     }
+    if (path.startsWith("/policies/") && method === "DELETE") {
+      const id = path.slice("/policies/".length);
+      policies = policies.filter((policy) => policy.id !== id);
+      return undefined as T;
+    }
 
     if (path.startsWith("/documents") && method === "GET" && path === "/documents") {
       return pageOf(documents) as T;
