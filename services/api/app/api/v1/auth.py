@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 
 from app.auth.deps import get_current_user
 from app.contracts.schemas import OrganizationSummary, UserMeResponse
+from app.database.postgres_persistence import organization_create_supported
 from app.repositories.memory_repos import OrganizationRepository
 from app.security.jwt import AuthenticatedUser
 
@@ -22,7 +23,11 @@ async def get_me(user: Annotated[AuthenticatedUser, Depends(get_current_user)]) 
 @router.get("/organizations", response_model=list[OrganizationSummary])
 async def list_my_organizations(
     user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    response: Response,
 ) -> list[OrganizationSummary]:
+    response.headers["X-Organization-Create-Supported"] = (
+        "true" if organization_create_supported() else "false"
+    )
     rows = OrganizationRepository().list_for_user(user.id)
     return [
         OrganizationSummary(
