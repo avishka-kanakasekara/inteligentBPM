@@ -14,17 +14,19 @@ import { RetryState } from "../../components/ui/RetryState";
 import { ApiError, apiClient } from "../../lib/apiClient";
 import { useOrganization } from "../../providers/OrganizationProvider";
 
-const COMPLETABLE = new Set([
-  "approved",
-  "executing",
-  "paused",
-  "blocked",
-  "failed",
-  "awaiting_approval",
-  "risk_complete",
-  "allocated",
-  "plan_ready",
-]);
+const TERMINAL = new Set(["completed", "cancelled"]);
+
+function canMarkComplete(process: ProcessSummary) {
+  if (TERMINAL.has(process.status)) return false;
+  return Boolean(
+    process.has_execution ||
+      process.has_risk ||
+      process.has_allocation ||
+      process.approval_status ||
+      process.execution_status ||
+      process.risk_decision,
+  );
+}
 
 function formatWhen(value: string) {
   try {
@@ -50,7 +52,7 @@ function PlanCard({
   completing: boolean;
   deleting: boolean;
 }) {
-  const canComplete = COMPLETABLE.has(process.status);
+  const canComplete = canMarkComplete(process);
   const isComplete = process.status === "completed";
 
   return (
@@ -167,6 +169,7 @@ export function ProcessPlansPage() {
         queryClient.invalidateQueries({ queryKey: ["active-runs"] }),
         queryClient.invalidateQueries({ queryKey: ["history"] }),
         queryClient.invalidateQueries({ queryKey: ["audit-events"] }),
+        queryClient.invalidateQueries({ queryKey: ["dashboard"] }),
       ]);
     },
   });
