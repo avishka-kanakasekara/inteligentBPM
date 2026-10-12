@@ -668,6 +668,10 @@ def get_memory_store() -> MemoryStore:
     return _STORE
 
 
+def postgres_persistence_enabled() -> bool:
+    return _POSTGRES_PERSISTENCE_ENABLED
+
+
 def initialize_postgres_persistence() -> None:
     """Load workflow data from Postgres and persist subsequent writes."""
     global _POSTGRES_PERSISTENCE_ENABLED
