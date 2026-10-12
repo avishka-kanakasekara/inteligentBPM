@@ -9,6 +9,7 @@ class OrgRole(StrEnum):
     OWNER = "owner"
     ADMIN = "admin"
     MANAGER = "manager"
+    APPROVER = "approver"
     EMPLOYEE = "employee"
     COMPLIANCE = "compliance"
     AUDITOR = "auditor"

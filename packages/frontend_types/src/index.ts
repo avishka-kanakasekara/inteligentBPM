@@ -36,6 +36,7 @@ export const OrgRoleSchema = z.enum([
   "owner",
   "admin",
   "manager",
+  "approver",
   "employee",
   "compliance",
   "auditor",
