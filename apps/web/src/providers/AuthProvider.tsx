@@ -44,6 +44,10 @@ type AuthProviderProps = {
 };
 
 function applySession(user: User, accessToken: string, refreshToken: string | null) {
+  const previousUserId = sessionStore.getUser()?.id;
+  if (previousUserId !== user.id) {
+    sessionStore.setOrganizationId(null);
+  }
   sessionStore.setUser(user);
   sessionStore.setToken(accessToken);
   sessionStore.setRefreshToken(refreshToken);
